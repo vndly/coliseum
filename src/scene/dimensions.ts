@@ -115,3 +115,111 @@ const RIM_SIGHT_LINE_MARGIN = Math.PI / 30 // 6°
  * elevation becomes the largest allowed polar angle.
  */
 export const CAMERA_MAX_POLAR_ANGLE = Math.PI / 2 - (RIM_SIGHT_LINE_ELEVATION + RIM_SIGHT_LINE_MARGIN)
+
+// ============================================
+// Die
+// ============================================
+
+export const DIE_SIZE = 1.0 // One unit, by the definition at the top of this file
+export const DIE_CORNER_RADIUS = 0.09 // Rounded edges, as a real die has
+export const DIE_CORNER_SEGMENTS = 4 // Divisions across each rounded corner
+
+export const DIE_COLOR = 0xf3ece0 // Bone, so it reads against both the walnut and the baize
+export const DIE_ROUGHNESS = 0.42
+export const DIE_CLEARCOAT = 0.5 // Polished resin, a softer coat than the bowl's lacquer
+export const DIE_CLEARCOAT_ROUGHNESS = 0.25
+
+export const DIE_PIP_COLOR = 0x18120e
+export const DIE_PIP_RADIUS = 0.095
+export const DIE_PIP_SEGMENTS = 10 // Around the sphere; only a shallow cap of it is ever seen
+export const DIE_PIP_SPACING = 0.235 // Face centre to a corner pip, along each face axis
+
+/**
+ * How far a pip's centre sits below the face it belongs to. There are no
+ * texture maps in this project and no CSG to drill with, so a pip is a small
+ * sphere sunk into the face until only its cap shows — which is what a filled
+ * pip looks like anyway.
+ */
+export const DIE_PIP_INSET = 0.07
+
+export const DIE_DENSITY = 1.0
+export const DIE_FRICTION = 0.55
+export const DIE_RESTITUTION = 0.3 // Enough to bounce once or twice, not to ping about
+export const DIE_LINEAR_DAMPING = 0.06
+export const DIE_ANGULAR_DAMPING = 0.22 // Bleeds the launch spin off so the die settles
+export const DIE_LAUNCH_SPIN = 14 // Peak random angular velocity at launch, in radians/second
+
+/**
+ * A runaway guard, not a game rule. The bowl overflows and the felt culls the
+ * spill long before this, but a spammed pointer should not be able to grow the
+ * body count without bound.
+ */
+export const DIE_LIMIT = 64
+
+// ============================================
+// Physics
+// ============================================
+
+/**
+ * A casino die is 16 mm across and one unit wide here, so a metre is 62.5
+ * units and gravity is that much larger than 9.81. Derived rather than typed
+ * as a number so the relationship stays visible: raise the metric size for a
+ * floatier, more cinematic throw, lower it for a heavier and faster one.
+ */
+const DIE_METRIC_SIZE = 0.016 // Metres
+export const GRAVITY = -9.81 / DIE_METRIC_SIZE
+
+export const PHYSICS_TIMESTEP = 1 / 120 // Half a render frame; a small fast body needs it
+export const PHYSICS_MAX_STEPS_PER_FRAME = 8 // Cap, so a stalled tab cannot spiral on catch-up
+
+export const BOWL_FRICTION = 0.45
+export const BOWL_RESTITUTION = 0.2 // Wood, damped by its lacquer
+
+/**
+ * The felt is a sensor rather than a solid floor: a die that reaches it is out
+ * of play and destroyed on the spot, so it never needs anything to rest on.
+ * Made deep, so that even the hardest throw cannot cross it between two steps.
+ */
+export const FELT_SENSOR_DEPTH = 20
+
+// ============================================
+// Throw
+// ============================================
+
+/**
+ * How high above the table a die is launched from. Above the rim, so that a
+ * press over the bowl spawns the die in open air rather than inside the wall.
+ */
+export const THROW_LAUNCH_HEIGHT = 3.6
+
+export const THROW_ELEVATION_ANGLE = Math.PI / 5 // 36°, held constant at every strength
+export const THROW_MIN_DRAG = 0.8 // Dead zone: a bare click throws nothing at all
+export const THROW_MAX_DRAG = 12 // Past this the throw is already at full strength
+export const THROW_MIN_SPEED = 30 // A gentle lob, roughly three units of ground covered
+export const THROW_MAX_SPEED = 115 // Clears the bowl entirely and lands well out on the felt
+
+/**
+ * How far from the bowl's axis a throw may start. Matched to the key light's
+ * shadow extent so a die is never launched from ground the shadow map does not
+ * cover — which also keeps a grazing camera angle from putting the launch
+ * point off screen entirely.
+ */
+export const THROW_MAX_LAUNCH_RADIUS = KEY_LIGHT_SHADOW_EXTENT
+
+// ============================================
+// Aim preview
+// ============================================
+
+export const AIM_DOT_COUNT = 24 // Also the instance count, so it is a hard ceiling
+export const AIM_DOT_RADIUS = 0.1
+export const AIM_DOT_SEGMENTS = 8 // Around the sphere; these are small on screen
+export const AIM_DOT_COLOR = 0xf3ece0
+export const AIM_DOT_OPACITY = 0.75
+export const AIM_DOT_END_SCALE = 0.35 // The arc tapers toward the point of first contact
+
+/**
+ * Seconds of flight between one dot and the next. Spacing the dots by time
+ * rather than by distance is what makes the preview read as strength: a hard
+ * throw spreads them out, a gentle one bunches them up.
+ */
+export const AIM_SAMPLE_INTERVAL = 0.014

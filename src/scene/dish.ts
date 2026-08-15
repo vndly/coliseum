@@ -6,7 +6,7 @@ import {CubicBezierCurve,
   MeshPhysicalMaterial,
   QuadraticBezierCurve,
   Vector2} from 'three'
-import type {Object3D} from 'three'
+import type {BufferGeometry, Object3D} from 'three'
 import {BOWL_CLEARCOAT,
   BOWL_CLEARCOAT_ROUGHNESS,
   BOWL_COLOR,
@@ -58,6 +58,16 @@ export class Dish {
 
   get object(): Object3D {
     return this.bowl
+  }
+
+  /**
+   * The revolved shell itself, exposed so the physics world can collide
+   * against the very triangles the bowl is drawn from. There is then only one
+   * description of the bowl's shape, and a die cannot hit a wall that is not
+   * where it looks.
+   */
+  get shell(): BufferGeometry {
+    return this.geometry
   }
 
   dispose(): void {

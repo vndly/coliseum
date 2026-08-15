@@ -8,12 +8,18 @@ import {ACESFilmicToneMapping,
   PerspectiveCamera,
   Scene,
   SRGBColorSpace,
+  TOUCH,
+  Timer,
   WebGLRenderer} from 'three'
 import type {WebGLRenderTarget} from 'three'
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js'
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js'
+import {AimPreview} from '@/scene/aim_preview'
+import {Dice} from '@/scene/dice'
 import {Dish} from '@/scene/dish'
+import {PhysicsWorld} from '@/scene/physics_world'
 import {Table} from '@/scene/table'
+import {ThrowController} from '@/scene/throw_controller'
 import {BACKGROUND_COLOR,
   CAMERA_DAMPING_FACTOR,
   CAMERA_FAR,
@@ -57,9 +63,23 @@ export class DishScene {
   private readonly controls: OrbitControls
   private readonly dish: Dish
   private readonly table: Table
+  private readonly physics: PhysicsWorld
+  private readonly dice: Dice
+  private readonly aimPreview: AimPreview
+  private readonly throwController: ThrowController
   private readonly keyLight: DirectionalLight // Held only so its shadow map can be released
   private readonly environment: WebGLRenderTarget // Image-based light, generated not loaded
   private readonly resizeObserver: ResizeObserver
+  /**
+   * Drives the simulation's fixed steps.
+   *
+   * Deliberately not connected to the document. Its Page Visibility support
+   * forces the delta to zero whenever the page is hidden, which silently
+   * freezes the simulation on any frame that still runs while the tab reports
+   * itself hidden. The animation loop already stops in a hidden tab, and the
+   * backlog cap in PhysicsWorld already handles the catch-up on the way back.
+   */
+  private readonly timer = new Timer()
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new WebGLRenderer({
@@ -88,7 +108,14 @@ export class DishScene {
 
     this.dish = new Dish()
     this.table = new Table()
-    this.scene.add(this.dish.object, this.table.object)
+    this.dice = new Dice()
+    this.aimPreview = new AimPreview()
+    this.scene.add(
+      this.dish.object,
+      this.table.object,
+      this.dice.object,
+      this.aimPreview.object,
+    )
 
     this.environment = DishScene.buildEnvironment(this.renderer)
     this.scene.environment = this.environment.texture
@@ -98,6 +125,22 @@ export class DishScene {
     this.scene.add(this.keyLight)
 
     this.controls = this.buildControls(canvas)
+
+    this.physics = new PhysicsWorld()
+    this.throwController = new ThrowController(
+      canvas,
+      this.camera,
+      this.physics,
+      this.dice,
+      this.aimPreview,
+    )
+
+    // Deliberately not awaited. Rapier is a WASM module and takes a moment to
+    // arrive; the bowl paints on the first frame either way, and a press that
+    // lands before physics does simply throws nothing.
+    this.physics.initialize(this.dish.shell).catch((error: unknown) => {
+      console.error('The physics world failed to start; dice cannot be thrown', error)
+    })
 
     this.resizeObserver = new ResizeObserver(() => {
       this.resize()
@@ -119,9 +162,13 @@ export class DishScene {
   dispose(): void {
     this.renderer.setAnimationLoop(null)
     this.resizeObserver.disconnect()
+    this.throwController.dispose()
     this.controls.dispose()
     this.dish.dispose()
     this.table.dispose()
+    this.dice.dispose()
+    this.aimPreview.dispose()
+    this.physics.dispose()
 
     // The renderer's own dispose clears its internal caches only; a light's
     // shadow map is a render target the light owns, and it stays allocated
@@ -141,6 +188,13 @@ export class DishScene {
     // controls keep moving on frames with no input and must be updated every
     // frame rather than only on events.
     this.controls.update()
+
+    // Step first, then drag the meshes onto the bodies, so that what is drawn
+    // is the state that was just simulated rather than the one before it.
+    this.timer.update()
+    this.physics.step(this.timer.getDelta())
+    this.dice.update(this.physics)
+
     this.renderer.render(this.scene, this.camera)
   }
 
@@ -177,13 +231,21 @@ export class DishScene {
   private buildControls(canvas: HTMLCanvasElement): OrbitControls {
     const controls = new OrbitControls(this.camera, canvas)
 
-    // The left button is deliberately left unbound. A drag-to-throw gesture is
-    // the obvious next thing this scene needs, and it should not have to take
-    // the button back off the camera later.
+    // The left button belongs to the throw gesture, which binds its own
+    // listeners to this same canvas.
     controls.mouseButtons = {
       LEFT: null,
       MIDDLE: null,
       RIGHT: MOUSE.ROTATE,
+    }
+
+    // The same division on touch, where there is no second button to orbit
+    // with: one finger throws and two orbit. Throwing is the primary gesture,
+    // so it gets the primary one, at the price of a two-finger orbit that
+    // nothing on screen advertises.
+    controls.touches = {
+      ONE: null,
+      TWO: TOUCH.DOLLY_ROTATE,
     }
 
     // Panning would let the bowl leave the frame with no way back, and would
