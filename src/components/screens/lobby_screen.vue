@@ -4,10 +4,10 @@
      seat, and the match's own screen is where the seats filling up is watched —
      the lobby never shows a match it is about to join. -->
 <script setup lang="ts">
-import {computed, onMounted, ref} from 'vue'
+import {computed, nextTick, onMounted, ref, useTemplateRef} from 'vue'
 import {useRoute, useRouter} from 'vue-router'
 import DieFace from '@/components/die_face.vue'
-import {normaliseMatchCode} from '@/match/codes'
+import {isMatchCode, normaliseMatchCode} from '@/match/codes'
 import {MatchClient} from '@/match/match_client'
 
 const MIN_PLAYERS = 2
@@ -18,6 +18,8 @@ const NAME_KEY = 'coliseum.player-name' // Where the last name played under is k
 
 const route = useRoute()
 const router = useRouter()
+
+const codeField = useTemplateRef<HTMLInputElement>('codeField')
 
 const mode = ref<'create' | 'join'>('create')
 const playerName = ref('')
@@ -139,12 +141,76 @@ async function runJoin(): Promise<void> {
   }
 }
 
+/**
+ * What the clipboard is holding, if the browser will say.
+ *
+ * Refusal is an answer like any other here — a page served over plain http has
+ * no clipboard to read at all, and a player can turn the browser's own prompt
+ * down — so it comes back as nothing rather than as a throw.
+ * @returns The clipboard's text, or null if it was not handed over
+ */
+async function readClipboard(): Promise<string | null> {
+  try {
+    return await navigator.clipboard.readText()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Fills the code from the clipboard, for a code that arrived in a message
+ * rather than out loud.
+ *
+ * A clipboard can only be read on a press like this one and never merely looked
+ * at, so the button is offered whenever the field is empty rather than only
+ * when there is a code sitting there to take.
+ */
+async function runPaste(): Promise<void> {
+  error.value = ''
+
+  const held = await readClipboard()
+
+  // The browser answers a clipboard read from behind a prompt, and going
+  // somewhere else is one of the ways that prompt is dismissed. By the time it
+  // answers the player may have left the form that asked — gone to start a
+  // match of their own, or typed the code out themselves — and an answer to a
+  // question nobody is still asking is dropped rather than shown.
+  if (mode.value !== 'join' || code.value.trim() !== '') {
+    return
+  }
+
+  if (held === null) {
+    error.value = 'Could not read the clipboard.'
+
+    return
+  }
+
+  const pasted = normaliseMatchCode(held)
+
+  if (!isMatchCode(pasted)) {
+    error.value = 'The clipboard does not hold a match code.'
+
+    return
+  }
+
+  code.value = pasted
+
+  // The button is gone the moment the field has a code in it, so the caret goes
+  // into the field rather than the focus onto nothing
+  await nextTick()
+  codeField.value?.focus()
+}
+
 function onCreate(): void {
   void runCreate()
 }
 
 function onJoin(): void {
   void runJoin()
+}
+
+function onPaste(): void {
+  void runPaste()
 }
 </script>
 
@@ -221,19 +287,39 @@ function onJoin(): void {
         </template>
 
         <template v-else>
-          <label class="field">
-            <span class="field__label">Match code</span>
-            <input
-              v-model="code"
-              class="field__input field__input--code"
-              type="text"
-              :maxlength="CODE_LENGTH"
-              autocapitalize="characters"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="K7QM"
-            >
-          </label>
+          <!-- Not a label wrapped round its input like the name above: a label
+               may hold one labelable element, and the paste button is a second -->
+          <div class="field">
+            <label class="field__label" for="match-code">Match code</label>
+
+            <div class="code">
+              <input
+                id="match-code"
+                ref="codeField"
+                v-model="code"
+                class="field__input field__input--code"
+                type="text"
+                :maxlength="CODE_LENGTH"
+                autocapitalize="characters"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="K7QM"
+              >
+
+              <button
+                v-if="code.trim() === ''"
+                type="button"
+                class="paste"
+                aria-label="Paste the code"
+                @click="onPaste"
+              >
+                <svg class="paste__icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="8" y="2" width="8" height="4" rx="1" />
+                  <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+                </svg>
+              </button>
+            </div>
+          </div>
 
           <button
             type="submit"
@@ -371,6 +457,43 @@ function onJoin(): void {
     text-align: center;
     text-transform: uppercase;
     text-indent: 0.3em;
+}
+
+/* Holds the paste button inside the input's right edge. It is only ever there
+   while the field is empty, so it has nothing but the placeholder to clear */
+.code {
+    position: relative;
+    display: flex;
+}
+
+.paste {
+    position: absolute;
+    top: 50%;
+    right: 0.5rem;
+    display: flex;
+    padding: 0.375rem;
+    border: 0;
+    border-radius: 0.375rem;
+    background: transparent;
+    color: var(--bone-faint);
+    cursor: pointer;
+    transform: translateY(-50%);
+    transition: background 160ms ease, color 160ms ease;
+}
+
+.paste:hover {
+    background: var(--brass-glow);
+    color: var(--brass);
+}
+
+.paste__icon {
+    width: 1.25rem;
+    height: 1.25rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }
 
 .counts {

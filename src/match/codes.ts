@@ -38,3 +38,15 @@ export function createMatchCode(): string {
 export function normaliseMatchCode(typed: string): string {
   return typed.replace(/\s/gu, '').toUpperCase()
 }
+
+/**
+ * Whether a string is a code this game could have drawn. Used to tell a code
+ * apart from whatever else a clipboard happened to be holding, which is the one
+ * place a string arrives without anybody having read it first.
+ * @param normalised - A code already through normaliseMatchCode
+ * @returns Whether it is the right length and drawn from the alphabet above
+ */
+export function isMatchCode(normalised: string): boolean {
+  return normalised.length === CODE_LENGTH
+    && [...normalised].every((character) => CODE_ALPHABET.includes(character))
+}
