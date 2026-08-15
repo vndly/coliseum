@@ -7,6 +7,10 @@ import globals from 'globals'
 // withVueTs wires up vue-eslint-parser and resolves .vue types for the
 // type-aware rules, which read the projects referenced by tsconfig.json
 export default withVueTs(
+  {
+    // Build output is generated, and linting it fails on bundled vendor code
+    ignores: ['dist/'],
+  },
   js.configs.recommended,
   vueTsConfigs.recommendedTypeChecked,
   pluginVue.configs['flat/recommended'],
