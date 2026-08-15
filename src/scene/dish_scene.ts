@@ -16,6 +16,7 @@ import {OrbitControls} from 'three/addons/controls/OrbitControls.js'
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js'
 import {AimPreview} from '@/scene/aim_preview'
 import {Dice} from '@/scene/dice'
+import type {DieSnapshot, ThrowLaunch} from '@/scene/die_state'
 import {Dish} from '@/scene/dish'
 import {PhysicsWorld} from '@/scene/physics_world'
 import {Table} from '@/scene/table'
@@ -45,7 +46,9 @@ import {BACKGROUND_COLOR,
   KEY_LIGHT_SHADOW_MAP_SIZE,
   KEY_LIGHT_SHADOW_NEAR,
   KEY_LIGHT_SHADOW_NORMAL_BIAS,
-  MAX_FRAME_TIME} from '@/scene/dimensions'
+  MAX_FRAME_TIME,
+  SETTLE_MINIMUM,
+  SETTLE_TIMEOUT} from '@/scene/dimensions'
 
 const MAX_PIXEL_RATIO = 2 // Past this, cost climbs and nobody can see the difference
 
@@ -81,6 +84,26 @@ export class DishScene {
    * backlog cap in PhysicsWorld already handles the catch-up on the way back.
    */
   private readonly timer = new Timer()
+
+  private throwing: number | null = null // Seconds since a throw began here, null between throws
+  private pending: DieSnapshot[] | null = null // A bowl from the match, waiting for this one to stop
+  private pendingElapsed = 0
+
+  /**
+   * Called when a gesture on this canvas finishes as a throw.
+   *
+   * The throw is deliberately not made here. It has to reach the other players
+   * before it can happen, and it comes back through applyThrow like anyone
+   * else's — which is what keeps one path through this class for every throw in
+   * the match, whoever made it.
+   */
+  onLaunch: ((launch: ThrowLaunch) => void) | null = null
+
+  /**
+   * Called once when the bowl comes to rest after a throw, or when it has been
+   * given long enough and is declared at rest regardless.
+   */
+  onSettled: (() => void) | null = null
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new WebGLRenderer({
@@ -132,8 +155,8 @@ export class DishScene {
       canvas,
       this.camera,
       this.physics,
-      this.dice,
       this.aimPreview,
+      this.emitLaunch,
     )
 
     // Deliberately not awaited. Rapier is a WASM module and takes a moment to
@@ -155,6 +178,53 @@ export class DishScene {
    */
   start(): void {
     this.renderer.setAnimationLoop(this.render)
+  }
+
+  /**
+   * Opens or closes the throw gesture, which is how a turn is enforced on the
+   * canvas itself rather than only on the controls beside it.
+   */
+  set throwEnabled(enabled: boolean) {
+    this.throwController.throwEnabled = enabled
+  }
+
+  /** How many dice are in the bowl, which is what DIE_LIMIT is measured against. */
+  get dieCount(): number {
+    return this.dice.count
+  }
+
+  /** Every die in the bowl, as the match is to record it. */
+  get bowlSnapshot(): DieSnapshot[] {
+    return this.dice.snapshot
+  }
+
+  /**
+   * Makes a throw, whoever made it.
+   *
+   * The local player's own throw comes through here too, and immediately
+   * rather than after the round trip: the hand that threw it should not be
+   * waiting on a database to see it leave.
+   * @param identifier - The name every player knows this die by
+   * @param launch - The throw, as its thrower described it
+   */
+  applyThrow(identifier: string, launch: ThrowLaunch): void {
+    this.dice.throw(this.physics, identifier, launch)
+    this.throwing = 0
+  }
+
+  /**
+   * Takes the bowl the match holds as authoritative, and applies it as soon as
+   * this player's own dice have stopped moving.
+   *
+   * Deferred rather than applied on arrival, because it usually arrives while
+   * the dice are still in the air here — the thrower's simulation finished
+   * first, which is the whole reason theirs is the one that counts. Snapping
+   * on arrival would take the throw away from anyone still watching it.
+   * @param bowl - Every die the match says is in the bowl
+   */
+  reconcileBowl(bowl: DieSnapshot[]): void {
+    this.pending = bowl
+    this.pendingElapsed = 0
   }
 
   /**
@@ -204,8 +274,57 @@ export class DishScene {
 
     this.physics.step(deltaTime)
     this.dice.update(this.physics, deltaTime)
+    this.advanceMatch(deltaTime)
 
     this.renderer.render(this.scene, this.camera)
+  }
+
+  /**
+   * Hands a finished gesture upwards. Bound as a field so it can be given to
+   * the throw controller without losing its receiver.
+   */
+  private readonly emitLaunch = (launch: ThrowLaunch): void => {
+    this.onLaunch?.(launch)
+  }
+
+  /**
+   * Advances the two things the match waits on: a throw made here coming to
+   * rest, and a bowl from the match waiting for somewhere still to land in.
+   * @param deltaTime - Seconds elapsed since the previous frame
+   */
+  private advanceMatch(deltaTime: number): void {
+    if (this.throwing !== null) {
+      this.throwing += deltaTime
+
+      // The minimum covers the frames between a body being created and the
+      // step that first moves it. Nothing has moved yet and every other die is
+      // still asleep, which is indistinguishable from a bowl at rest.
+      const atRest = this.throwing >= SETTLE_MINIMUM && this.dice.isSettled
+
+      if (atRest || this.throwing >= SETTLE_TIMEOUT) {
+        this.throwing = null
+        this.onSettled?.()
+      }
+    }
+
+    // Rapier is still loading. The bowl is held rather than dropped: the first
+    // one a player is given is the match's opening state, and arriving before
+    // the world does is the normal case rather than the unlucky one.
+    if (this.pending === null || this.physics.world === null) {
+      return
+    }
+
+    this.pendingElapsed += deltaTime
+
+    if (!this.dice.isSettled && this.pendingElapsed < SETTLE_TIMEOUT) {
+      return
+    }
+
+    const bowl = this.pending
+
+    // Taken off before it is applied, so a bowl cannot be applied twice
+    this.pending = null
+    this.dice.restore(this.physics, bowl)
   }
 
   /**

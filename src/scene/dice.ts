@@ -9,6 +9,7 @@ import type {BufferGeometry, Object3D} from 'three'
 import {RoundedBoxGeometry} from 'three/addons/geometries/RoundedBoxGeometry.js'
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js'
 import {Die} from '@/scene/die'
+import type {DieSnapshot, ThrowLaunch} from '@/scene/die_state'
 import type {PhysicsWorld} from '@/scene/physics_world'
 import {DIE_CLEARCOAT,
   DIE_CLEARCOAT_ROUGHNESS,
@@ -43,6 +44,9 @@ export class Dice {
   private readonly bodyMaterial: MeshPhysicalMaterial
   private readonly pipMaterial: MeshPhysicalMaterial
   private readonly dice: Die[] = []
+  private readonly restoredPosition = new Vector3() // Scratch, to keep reconciling allocation free
+  private readonly restoredRotation = new Quaternion()
+  private readonly wanted = new Map<string, DieSnapshot>() // Scratch, for the same reason
 
   constructor() {
     this.group = new Group()
@@ -77,23 +81,126 @@ export class Dice {
     return this.group
   }
 
+  /** How many dice are in the bowl, which is what DIE_LIMIT is measured against. */
+  get count(): number {
+    return this.dice.length
+  }
+
+  /**
+   * Whether the bowl has come to rest, and a throw can be declared over.
+   *
+   * A die on its way out counts as still moving even once its body is asleep.
+   * Its removal changes the world for anything resting against it, so a
+   * snapshot taken mid-exit describes a bowl that is about to rearrange itself
+   * — and it would be sent to the other player as though it were final.
+   */
+  get isSettled(): boolean {
+    for (const die of this.dice) {
+      if (die.isOutOfPlay || !die.isAsleep) {
+        return false
+      }
+    }
+
+    return true
+  }
+
+  /**
+   * Every die in the bowl, ready to be written to the match as the result of a
+   * throw. Dice on their way out are left out: they have left the match, and
+   * their absence from the bowl is how the other player is told so.
+   */
+  get snapshot(): DieSnapshot[] {
+    const bowl: DieSnapshot[] = []
+
+    for (const die of this.dice) {
+      if (!die.isOutOfPlay) {
+        bowl.push(die.snapshot)
+      }
+    }
+
+    return bowl
+  }
+
   /**
    * Puts a new die into the world, already moving.
    * @param physics - The world it is thrown into; nothing happens until it is ready
-   * @param origin - Where the die comes into existence
-   * @param velocity - How fast, and in which direction, it leaves
+   * @param identifier - The name both players know this die by
+   * @param launch - The throw, exactly as the thrower described it
    */
-  throw(physics: PhysicsWorld, origin: Vector3, velocity: Vector3): void {
+  throw(physics: PhysicsWorld, identifier: string, launch: ThrowLaunch): void {
     const world = physics.world
 
     if (world === null || this.dice.length >= DIE_LIMIT) {
       return
     }
 
-    const die = new Die(world, this.buildMeshes(), origin, velocity)
+    const die = Die.thrown(world, this.buildMeshes(), identifier, launch)
 
     this.group.add(die.object)
     this.dice.push(die)
+  }
+
+  /**
+   * Makes this player's bowl match the one the match holds.
+   *
+   * Applied as a whole state rather than as a difference: dice named in both
+   * are moved, dice only the match knows about are built, and dice only this
+   * player still has are taken away. That is what makes a throw the point at
+   * which two players' bowls converge again, however far the two simulations
+   * drifted while the dice were in the air — and it is the same path that
+   * rebuilds the bowl after a reload, because a reloaded player is simply one
+   * whose bowl is empty.
+   * @param physics - The world the bodies live in; nothing happens until it is ready
+   * @param bowl - Every die the match says is in the bowl
+   */
+  restore(physics: PhysicsWorld, bowl: DieSnapshot[]): void {
+    const world = physics.world
+
+    if (world === null) {
+      return
+    }
+
+    this.wanted.clear()
+
+    for (const snapshot of bowl) {
+      this.wanted.set(snapshot.id, snapshot)
+    }
+
+    // Walked backwards, so that splicing a die out cannot move one that has
+    // not been looked at yet past the cursor
+    for (let index = this.dice.length - 1; index >= 0; index--) {
+      const die = this.dice[index]
+
+      if (die === undefined) {
+        continue
+      }
+
+      const snapshot = this.wanted.get(die.id)
+
+      if (snapshot === undefined) {
+        this.group.remove(die.object)
+        die.remove(world)
+        this.dice.splice(index, 1)
+
+        continue
+      }
+
+      this.restoredPosition.set(...snapshot.position)
+      this.restoredRotation.set(...snapshot.rotation)
+      die.teleport(this.restoredPosition, this.restoredRotation)
+
+      // Taken off the list, so whatever is left is what has to be built
+      this.wanted.delete(die.id)
+    }
+
+    for (const snapshot of this.wanted.values()) {
+      const die = Die.resting(world, this.buildMeshes(), snapshot)
+
+      this.group.add(die.object)
+      this.dice.push(die)
+    }
+
+    this.wanted.clear()
   }
 
   /**

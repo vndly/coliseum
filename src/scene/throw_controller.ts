@@ -1,10 +1,11 @@
-import {Plane, Raycaster, Vector2, Vector3} from 'three'
+import {Euler, Plane, Quaternion, Raycaster, Vector2, Vector3} from 'three'
 import type {PerspectiveCamera} from 'three'
 import type {AimPreview} from '@/scene/aim_preview'
-import type {Dice} from '@/scene/dice'
+import type {ThrowLaunch} from '@/scene/die_state'
 import type {PhysicsWorld} from '@/scene/physics_world'
 import {AIM_DOT_COUNT,
   CAMERA_FAR,
+  DIE_LAUNCH_SPIN,
   GRAVITY,
   THROW_CLEARANCE_HEIGHT,
   THROW_CLEARANCE_RADIUS,
@@ -38,6 +39,12 @@ import {AIM_DOT_COUNT,
  * supplies the ground beneath the launch, and reading it off the near rim
  * whenever the drag crossed the bowl would make the throw jump.
  *
+ * A finished gesture is handed out rather than thrown directly. The die it
+ * describes has to reach the other players before it exists here, so what a
+ * release produces is a description of a throw and not a die — including the
+ * attitude and the tumble, which are drawn here rather than where the die is
+ * built precisely so that every player builds the same one.
+ *
  * Listeners are bound to the canvas here rather than in the component, in the
  * same way the orbit controls bind their own. Vue owns the element and this
  * object's lifetime, and nothing more.
@@ -46,8 +53,9 @@ export class ThrowController {
   private readonly canvas: HTMLCanvasElement
   private readonly camera: PerspectiveCamera
   private readonly physics: PhysicsWorld
-  private readonly dice: Dice
   private readonly preview: AimPreview
+  private readonly launch: (launch: ThrowLaunch) => void // Where a finished gesture goes
+  private enabled = false // Off until it is this player's turn; a match starts with someone else's
 
   private readonly raycaster = new Raycaster()
   private readonly table = new Plane(new Vector3(0, 1, 0), 0) // The felt, at height zero
@@ -66,19 +74,32 @@ export class ThrowController {
     canvas: HTMLCanvasElement,
     camera: PerspectiveCamera,
     physics: PhysicsWorld,
-    dice: Dice,
     preview: AimPreview,
+    launch: (launch: ThrowLaunch) => void,
   ) {
     this.canvas = canvas
     this.camera = camera
     this.physics = physics
-    this.dice = dice
     this.preview = preview
+    this.launch = launch
 
     canvas.addEventListener('pointerdown', this.onPointerDown)
     canvas.addEventListener('pointermove', this.onPointerMove)
     canvas.addEventListener('pointerup', this.onPointerUp)
     canvas.addEventListener('pointercancel', this.onPointerCancel)
+  }
+
+  /**
+   * Opens or closes the gesture. Closing it abandons whatever was being aimed,
+   * so a turn that ends mid-drag does not leave a line on screen pointing at a
+   * throw that can no longer be made.
+   */
+  set throwEnabled(enabled: boolean) {
+    this.enabled = enabled
+
+    if (!enabled) {
+      this.cancel()
+    }
   }
 
   dispose(): void {
@@ -95,6 +116,13 @@ export class ThrowController {
    * can be added and removed as a listener without losing its receiver.
    */
   private readonly onPointerDown = (event: PointerEvent): void => {
+    // Someone else's turn. Nothing is recorded, because a gesture that cannot
+    // begin cannot strand anything — and the next primary pointer clears the
+    // set anyway, so the turn arriving mid-touch leaves nothing behind.
+    if (!this.enabled) {
+      return
+    }
+
     // A primary pointer is by definition the first of a fresh gesture, so
     // anything still recorded as down is stale — an up that never arrived.
     // Without this the set could strand an entry and refuse every later throw.
@@ -163,7 +191,7 @@ export class ThrowController {
       this.clampToThrowRadius(this.launchGround)
 
       if (this.buildLaunch()) {
-        this.dice.throw(this.physics, this.launchOrigin, this.launchVelocity)
+        this.launch(this.describeLaunch())
       }
     }
 
@@ -311,6 +339,73 @@ export class ThrowController {
     this.launchVelocity.y -= GRAVITY * THROW_FLIGHT_TIME / 2
 
     return true
+  }
+
+  /**
+   * Packages the throw as it currently stands, together with the attitude and
+   * the tumble it is to leave the hand with.
+   *
+   * Both are drawn here rather than where the die is built. Every player in the
+   * match builds a die from this same description, and a random value rolled at
+   * the far end is the one thing that would guarantee they built different ones.
+   * @returns The throw, ready both to be sent and to be made
+   */
+  private describeLaunch(): ThrowLaunch {
+    const orientation = ThrowController.randomOrientation()
+    const spin = ThrowController.randomSpin()
+
+    return {
+      origin: [
+        this.launchOrigin.x,
+        this.launchOrigin.y,
+        this.launchOrigin.z,
+      ],
+      velocity: [
+        this.launchVelocity.x,
+        this.launchVelocity.y,
+        this.launchVelocity.z,
+      ],
+      orientation: [
+        orientation.x,
+        orientation.y,
+        orientation.z,
+        orientation.w,
+      ],
+      angularVelocity: [
+        spin.x,
+        spin.y,
+        spin.z,
+      ],
+    }
+  }
+
+  /**
+   * A random attitude for the die as it leaves the hand.
+   *
+   * Random Euler angles are not a uniform distribution over orientations, and
+   * do not need to be: nothing here reads the face that lands upwards, so this
+   * only has to stop every throw starting square to the camera.
+   * @returns The starting rotation
+   */
+  private static randomOrientation(): Quaternion {
+    return new Quaternion().setFromEuler(new Euler(
+      Math.random() * Math.PI * 2,
+      Math.random() * Math.PI * 2,
+      Math.random() * Math.PI * 2,
+    ))
+  }
+
+  /**
+   * The tumble the die is thrown with. Without it a die launched flat stays
+   * flat, arrives face down and slides rather than rolls.
+   * @returns The starting angular velocity, in radians per second
+   */
+  private static randomSpin(): Vector3 {
+    return new Vector3(
+      (Math.random() * 2 - 1) * DIE_LAUNCH_SPIN,
+      (Math.random() * 2 - 1) * DIE_LAUNCH_SPIN,
+      (Math.random() * 2 - 1) * DIE_LAUNCH_SPIN,
+    )
   }
 
   /**

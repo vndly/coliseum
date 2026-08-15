@@ -223,11 +223,40 @@ export const DIE_LAUNCH_SPIN = 14 // Peak random angular velocity at launch, in 
 export const DIE_VANISH_DURATION = 0.25 // Seconds
 
 /**
- * A runaway guard, not a game rule. The bowl overflows and the felt culls the
- * spill long before this, but a spammed pointer should not be able to grow the
- * body count without bound.
+ * How many dice the bowl holds before it refuses another throw.
+ *
+ * Began as a runaway guard against a spammed pointer and is now a rule of the
+ * match as well: a throw into a full bowl is rejected rather than queued, and
+ * both players are looking at the same bowl, so both agree on when it is full.
  */
 export const DIE_LIMIT = 64
+
+/**
+ * The identifier carried by the die a match opens with.
+ *
+ * Every other die is named for the throw that made it, and throws are numbered
+ * from one, so nothing else can ever claim this.
+ */
+export const OPENING_DIE_ID = '0'
+
+/**
+ * The shortest a throw may run before the bowl is even tested for rest.
+ *
+ * Covers the moment between a body being created and the first step running
+ * it, where the new die has not moved yet and every die already in the bowl is
+ * still asleep — which reads as a bowl at rest, one frame after a throw.
+ */
+export const SETTLE_MINIMUM = 0.5 // Seconds
+
+/**
+ * The longest a throw may run before its result is written anyway.
+ *
+ * A die wedged against the rim can jitter for as long as it likes, and the
+ * whole match blocks on this: nobody else's bowl is reconciled and nobody's
+ * turn advances until the throw is declared over. A slightly early snapshot
+ * beats a match that never continues.
+ */
+export const SETTLE_TIMEOUT = 10 // Seconds
 
 // ============================================
 // Physics
