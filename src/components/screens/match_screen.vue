@@ -23,6 +23,8 @@ const code = (typeof parameter === 'string' ? parameter : '').toUpperCase()
 
 const canvas = useTemplateRef<HTMLCanvasElement>('canvas')
 
+const COPIED_MILLISECONDS = 2000 // How long the copy button holds its answer
+
 // None of these are refs: the scene mutates every frame and must stay out of
 // reactivity, and the client and the two counters are only ever read from
 // callbacks that already know when they changed
@@ -30,10 +32,12 @@ let scene: DishScene | null = null
 let client: MatchClient | null = null
 let pendingSeq = 0 // The throw made here that is waiting to come to rest
 let appliedBowlVersion = -1 // The last bowl handed to the scene; -1 so the opening one lands
+let copiedTimer = 0 // The pending reset of the copy button, so it can be called off
 
 const state = shallowRef<MatchState | null>(null)
 const uid = ref('')
 const busy = ref(false) // A throw made here is still in the air
+const copyResult = ref<'none' | 'done' | 'failed'>('none') // What the last press of copy came to
 const error = ref('')
 
 const activePlayer = computed<MatchPlayer | null>(() => {
@@ -67,8 +71,8 @@ const waitingLine = computed<string>(() => {
   const empty = match.playerCount - match.players.length
 
   return empty === 1
-    ? 'Waiting for one more player. Read the code out to them.'
-    : `Waiting for ${empty} more players. Read the code out to them.`
+    ? 'Waiting for one more player.'
+    : `Waiting for ${empty} more players.`
 })
 
 const status = computed<string>(() => {
@@ -106,7 +110,35 @@ function describe(reason: unknown): string {
 }
 
 function seatedName(seat: number): string {
-  return state.value?.players[seat - 1]?.name ?? 'Open seat'
+  return state.value?.players[seat - 1]?.name ?? 'Waiting for player…'
+}
+
+/**
+ * Puts the code on the clipboard, so it can be sent rather than dictated.
+ *
+ * The clipboard is missing altogether outside a secure context — which is what
+ * a phone opening this over plain http on the local network gets — so the
+ * failure is answered rather than swallowed. Answered here rather than on the
+ * match's own error line: that line is never cleared, and one press of a button
+ * should not pin a message over the scene for the rest of the game.
+ */
+async function runCopy(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(code)
+
+    copyResult.value = 'done'
+  } catch {
+    copyResult.value = 'failed'
+  }
+
+  window.clearTimeout(copiedTimer)
+  copiedTimer = window.setTimeout(() => {
+    copyResult.value = 'none'
+  }, COPIED_MILLISECONDS)
+}
+
+function onCopy(): void {
+  void runCopy()
 }
 
 /**
@@ -245,6 +277,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.clearTimeout(copiedTimer)
   client?.dispose()
   client = null
   scene?.dispose()
@@ -267,7 +300,31 @@ onBeforeUnmount(() => {
     <div v-if="!playing" class="waiting">
       <div class="waiting__card">
         <p class="label">Match code</p>
-        <p class="waiting__code">{{ code }}</p>
+
+        <div class="waiting__row">
+          <p class="waiting__code">{{ code }}</p>
+
+          <button
+            type="button"
+            class="copy"
+            :class="{'copy--done': copyResult === 'done'}"
+            :aria-label="copyResult === 'done' ? 'Match code copied' : 'Copy match code'"
+            @click="onCopy"
+          >
+            <svg class="copy__icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path v-if="copyResult === 'done'" d="m4 12.5 5 5 11-11" />
+              <g v-else>
+                <path d="M9 16H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v3" />
+                <path d="M11 9h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z" />
+              </g>
+            </svg>
+          </button>
+        </div>
+
+        <p v-if="copyResult === 'failed'" class="waiting__snag" role="alert">
+          Could not copy the code.
+        </p>
+
         <p class="waiting__line">{{ waitingLine }}</p>
 
         <ul class="seats">
@@ -372,13 +429,61 @@ onBeforeUnmount(() => {
         0 1.5rem 3rem rgb(0 0 0 / 45%);
 }
 
-.waiting__code {
+/* The code and the button that copies it read as one object, so the pair is
+   centred rather than the code alone */
+.waiting__row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.125rem;
     margin-top: 0.75rem;
+}
+
+.waiting__code {
     font-family: var(--font-mono);
     font-size: 2.5rem;
     font-weight: 600;
     letter-spacing: 0.28em;
     text-indent: 0.28em;
+    color: var(--brass);
+}
+
+.copy {
+    display: flex;
+    padding: 0.5rem;
+    border: 0;
+    border-radius: 0.5rem;
+    background: transparent;
+    color: var(--bone-faint);
+    cursor: pointer;
+    transition: background 160ms ease, color 160ms ease;
+}
+
+.copy:hover {
+    background: var(--brass-glow);
+    color: var(--brass);
+}
+
+/* Stays lit while the tick is up, so the press is answered even after the
+   pointer has left the button */
+.copy--done {
+    color: var(--brass);
+}
+
+.copy__icon {
+    width: 1.25rem;
+    height: 1.25rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+/* The copy button's own failure, and only for as long as the button holds it */
+.waiting__snag {
+    margin-top: 0.5rem;
+    font-size: 0.8125rem;
     color: var(--brass);
 }
 

@@ -1,21 +1,20 @@
 <!-- The way into a match: start one, or take a seat in one that exists.
 
-     Joining is two steps rather than one. A code is four characters and
-     therefore guessable, so the code is read and the match shown before a seat
-     is taken — a mistyped code that happens to exist is a stranger's game, and
-     the seats are what make that obvious. -->
+     A code is enough on its own. Typing one and pressing the button takes the
+     seat, and the match's own screen is where the seats filling up is watched —
+     the lobby never shows a match it is about to join. -->
 <script setup lang="ts">
-import {computed, onMounted, ref, shallowRef} from 'vue'
+import {computed, onMounted, ref} from 'vue'
 import {useRoute, useRouter} from 'vue-router'
 import DieFace from '@/components/die_face.vue'
 import {normaliseMatchCode} from '@/match/codes'
 import {MatchClient} from '@/match/match_client'
-import type {MatchState} from '@/match/match_state'
 
 const MIN_PLAYERS = 2
 const MAX_PLAYERS = 6
 const CODE_LENGTH = 4
 const NAME_LIMIT = 16
+const NAME_KEY = 'coliseum.player-name' // Where the last name played under is kept
 
 const route = useRoute()
 const router = useRouter()
@@ -26,10 +25,6 @@ const playerCount = ref(MIN_PLAYERS)
 const code = ref('')
 const busy = ref(false)
 const error = ref('')
-
-// The match being considered, once a code has been looked up. Shallow because
-// nothing inside it is edited — it is replaced whole or not at all.
-const found = shallowRef<MatchState | null>(null)
 
 const seatCounts = computed<number[]>(() => {
   const counts: number[] = []
@@ -44,15 +39,44 @@ const seatCounts = computed<number[]>(() => {
 const trimmedName = computed<string>(() => playerName.value.trim())
 const canCreate = computed<boolean>(() => trimmedName.value.length > 0 && !busy.value)
 
-const canFind = computed<boolean>(
+const canJoin = computed<boolean>(
   () => trimmedName.value.length > 0
     && normaliseMatchCode(code.value).length === CODE_LENGTH
     && !busy.value,
 )
 
-// A player arriving from a match they turned out not to be in, with the code
-// carried over so they only have to say who they are
+/**
+ * The name this browser last played under.
+ *
+ * Guarded because reaching for storage at all throws outright in a browser set
+ * to block it, and a name is not worth taking the lobby down for.
+ * @returns The stored name, or an empty string if there is none to be had
+ */
+function rememberedName(): string {
+  try {
+    return localStorage.getItem(NAME_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Keeps the name for the next match, so it is typed once rather than every time.
+ * @param name - The name being played under, already trimmed
+ */
+function rememberName(name: string): void {
+  try {
+    localStorage.setItem(NAME_KEY, name)
+  } catch {
+    // Storage is blocked; the name simply is not remembered
+  }
+}
+
 onMounted(() => {
+  playerName.value = rememberedName()
+
+  // A player arriving from a match they turned out not to be in, with the code
+  // carried over so they only have to say who they are
   const carried = route.query.code
 
   if (typeof carried === 'string') {
@@ -65,19 +89,15 @@ function describe(reason: unknown): string {
   return reason instanceof Error ? reason.message : 'Something went wrong. Try again.'
 }
 
-function seatedName(seat: number): string {
-  return found.value?.players[seat - 1]?.name ?? 'Open seat'
-}
-
 function chooseMode(next: 'create' | 'join'): void {
   mode.value = next
   error.value = ''
-  found.value = null
 }
 
 async function runCreate(): Promise<void> {
   busy.value = true
   error.value = ''
+  rememberName(trimmedName.value)
 
   try {
     const created = await MatchClient.create(trimmedName.value, playerCount.value)
@@ -94,42 +114,23 @@ async function runCreate(): Promise<void> {
   }
 }
 
-async function runFind(): Promise<void> {
-  busy.value = true
-  error.value = ''
-
-  try {
-    const match = await MatchClient.peek(normaliseMatchCode(code.value))
-
-    if (match === null) {
-      error.value = 'No match with that code.'
-    } else {
-      found.value = match
-    }
-  } catch (reason: unknown) {
-    error.value = describe(reason)
-  } finally {
-    busy.value = false
-  }
-}
-
+// The seat is taken on the strength of the code alone. Every way that can fail
+// — no such match, full, already under way — is refused by the join itself, and
+// arrives here as the message shown under the form.
 async function runJoin(): Promise<void> {
-  const match = found.value
-
-  if (match === null) {
-    return
-  }
+  const match = normaliseMatchCode(code.value)
 
   busy.value = true
   error.value = ''
+  rememberName(trimmedName.value)
 
   try {
-    await MatchClient.join(match.code, trimmedName.value)
+    await MatchClient.join(match, trimmedName.value)
 
     await router.push({
       name: 'match',
       params: {
-        code: match.code,
+        code: match,
       },
     })
   } catch (reason: unknown) {
@@ -142,10 +143,6 @@ function onCreate(): void {
   void runCreate()
 }
 
-function onFind(): void {
-  void runFind()
-}
-
 function onJoin(): void {
   void runJoin()
 }
@@ -155,7 +152,6 @@ function onJoin(): void {
   <main class="lobby">
     <header class="lobby__head">
       <h1 class="lobby__wordmark">Coliseum</h1>
-      <p class="lobby__line">Two to six players, one bowl.</p>
     </header>
 
     <section class="card">
@@ -220,11 +216,11 @@ function onJoin(): void {
             :disabled="!canCreate"
             @click="onCreate"
           >
-            {{ busy ? 'Starting…' : 'Start the match' }}
+            {{ busy ? 'Creating…' : 'Create match' }}
           </button>
         </template>
 
-        <template v-else-if="found === null">
+        <template v-else>
           <label class="field">
             <span class="field__label">Match code</span>
             <input
@@ -242,37 +238,11 @@ function onJoin(): void {
           <button
             type="submit"
             class="action"
-            :disabled="!canFind"
-            @click="onFind"
-          >
-            {{ busy ? 'Looking…' : 'Find the match' }}
-          </button>
-        </template>
-
-        <template v-else>
-          <div class="found">
-            <p class="found__code">{{ found.code }}</p>
-            <ul class="seats">
-              <li v-for="seat in found.playerCount" :key="seat" class="seats__seat">
-                <DieFace :value="seat" :lit="seat <= found.players.length" />
-                <span
-                  class="seats__name"
-                  :class="{'seats__name--open': seat > found.players.length}"
-                >{{ seatedName(seat) }}</span>
-              </li>
-            </ul>
-          </div>
-
-          <button
-            type="submit"
-            class="action"
-            :disabled="busy"
+            :disabled="!canJoin"
             @click="onJoin"
           >
-            {{ busy ? 'Taking a seat…' : 'Take a seat' }}
+            {{ busy ? 'Joining…' : 'Join match' }}
           </button>
-
-          <button type="button" class="quiet" @click="found = null">Try another code</button>
         </template>
 
         <p v-if="error" class="error" role="alert">{{ error }}</p>
@@ -302,19 +272,15 @@ function onJoin(): void {
     text-align: center;
 }
 
+/* The tracking comes down as the size goes up: what reads as a stamped plate at
+   a caption's size gaps the word into eight loose letters at a title's */
 .lobby__wordmark {
-    font-size: 0.9375rem;
+    font-size: clamp(2.25rem, 11vw, 3rem);
     font-weight: 700;
-    letter-spacing: 0.42em;
-    text-indent: 0.42em; /* Puts the tracking back inside the centred line */
+    letter-spacing: 0.16em;
+    text-indent: 0.16em; /* Puts the tracking back inside the centred line */
     text-transform: uppercase;
     color: var(--brass);
-}
-
-.lobby__line {
-    margin-top: 0.75rem;
-    font-size: 0.9375rem;
-    color: var(--bone-dim);
 }
 
 .card {
@@ -445,65 +411,6 @@ function onJoin(): void {
     background: var(--brass-glow);
     color: var(--bone-faint);
     cursor: not-allowed;
-}
-
-.quiet {
-    padding: 0;
-    border: 0;
-    background: transparent;
-    font-size: 0.8125rem;
-    color: var(--bone-dim);
-    text-decoration: underline;
-    text-underline-offset: 0.25em;
-    cursor: pointer;
-}
-
-.quiet:hover {
-    color: var(--bone);
-}
-
-.found {
-    padding: 1.25rem;
-    border: 1px solid var(--brass-edge);
-    border-radius: 0.5rem;
-    background: var(--well);
-    text-align: center;
-}
-
-.found__code {
-    font-family: var(--font-mono);
-    font-size: 1.75rem;
-    font-weight: 600;
-    letter-spacing: 0.3em;
-    text-indent: 0.3em;
-    color: var(--brass);
-}
-
-.seats {
-    display: flex;
-    flex-direction: column;
-    gap: 0.625rem;
-    margin-top: 1.25rem;
-    list-style: none;
-    text-align: left;
-}
-
-.seats__seat {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-}
-
-.seats__seat .die-face {
-    --size: 1.5rem;
-}
-
-.seats__name {
-    font-size: 0.9375rem;
-}
-
-.seats__name--open {
-    color: var(--bone-faint);
 }
 
 .error {

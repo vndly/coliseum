@@ -1,6 +1,5 @@
 import {collection,
   doc,
-  getDoc,
   increment,
   limit,
   onSnapshot,
@@ -117,20 +116,6 @@ export class MatchClient {
     }
 
     throw new Error('Could not find a free match code. Try again.')
-  }
-
-  /**
-   * Reads a match without joining it, so a player can be shown what they are
-   * about to walk into before they commit to a seat. A code is four characters
-   * and guessable, and a mistyped one that happens to exist is somebody else's
-   * game.
-   * @param code - The code as it was typed, already normalised
-   * @returns The match, or null if there is none
-   */
-  static async peek(code: string): Promise<MatchState | null> {
-    const snapshot = await getDoc(doc(firestore, MATCHES, code))
-
-    return parseMatchState(code, snapshot.data())
   }
 
   /**
