@@ -4,10 +4,11 @@ import {Euler, Quaternion, Vector3} from 'three'
 import type {Object3D} from 'three'
 import {DIE_ANGULAR_DAMPING,
   DIE_CORNER_RADIUS,
-  DIE_DENSITY,
   DIE_FRICTION,
+  DIE_INERTIA,
   DIE_LAUNCH_SPIN,
   DIE_LINEAR_DAMPING,
+  DIE_MASS,
   DIE_RESTITUTION,
   DIE_SIZE,
   DIE_VANISH_DURATION} from '@/scene/dimensions'
@@ -51,7 +52,18 @@ export class Die {
 
     this.collider = world.createCollider(
       ColliderDesc.roundCuboid(halfExtent, halfExtent, halfExtent, DIE_CORNER_RADIUS)
-        .setDensity(DIE_DENSITY)
+
+        // Stated rather than left to the shape and a density, which is the
+        // whole point: the inertia is deliberately lighter than the solid cube
+        // this is drawn as, so that a hit tumbles the die instead of sliding
+        // it. Rapier would otherwise compute the truthful figure and the cheat
+        // would have nowhere to live.
+        .setMassProperties(
+          DIE_MASS,
+          new Vector3(0, 0, 0), // Centre of mass, at the die's own centre
+          new Vector3(DIE_INERTIA, DIE_INERTIA, DIE_INERTIA), // Equal about all three axes, as a cube's is
+          new Quaternion(), // The inertia's own frame, square to the die
+        )
         .setFriction(DIE_FRICTION)
         .setRestitution(DIE_RESTITUTION),
       this.body,

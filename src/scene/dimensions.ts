@@ -13,7 +13,7 @@
 // Bowl
 // ============================================
 
-export const BOWL_INTERIOR_FLOOR_RADIUS = 3.0 // Flat part of the inside base
+export const BOWL_INTERIOR_FLOOR_RADIUS = 4.1 // Flat part of the inside base
 export const BOWL_INTERIOR_FLOOR_HEIGHT = 0.53 // Inside base, above the table
 export const BOWL_RIM_RADIUS = 5.25 // Widest point, at the outside of the bead
 export const BOWL_RIM_HEIGHT = 4.2 // Top of the bead, above the table
@@ -83,8 +83,7 @@ export const CAMERA_FAR = 400
 export const CAMERA_TARGET_HEIGHT = 1.5 // Orbit about the interior, not the foot
 export const CAMERA_MIN_DISTANCE = 16.5 // Closest approach that still holds the whole rim in frame
 export const CAMERA_MAX_DISTANCE = 39
-export const CAMERA_START_DISTANCE = 21 // Leaves the bowl about half the frame height
-export const CAMERA_START_POLAR_ANGLE = Math.PI * 0.195 // ~35°, a raised three-quarter view
+export const CAMERA_START_DISTANCE = 21 // Leaves the bowl about two thirds of the frame height
 export const CAMERA_START_AZIMUTH_ANGLE = Math.PI * 0.15
 export const CAMERA_DAMPING_FACTOR = 0.06
 
@@ -93,6 +92,15 @@ export const CAMERA_DAMPING_FACTOR = 0.06
  * becomes meaningless and the orbit spins on the spot.
  */
 export const CAMERA_MIN_POLAR_ANGLE = 0.1
+
+/**
+ * The scene opens straight overhead. The whole of the floor is in view at once
+ * from there, no die is hidden behind another, and every one of them is read
+ * the same way round — which is what the bowl is for. Orbiting down to a
+ * three-quarter view, where the bowl is an object rather than a circle, is the
+ * player's to do.
+ */
+export const CAMERA_START_POLAR_ANGLE = CAMERA_MIN_POLAR_ANGLE
 
 /**
  * The shallowest sight line that still clears the near rim, measured from the
@@ -142,17 +150,40 @@ export const DIE_PIP_SPACING = 0.235 // Face centre to a corner pip, along each 
  */
 export const DIE_PIP_INSET = 0.07
 
-export const DIE_DENSITY = 1.0
+export const DIE_MASS = 1.0 // Every die is the same, so only the ratio to DIE_INERTIA matters
 
 /**
- * Polished resin on lacquer, which is a slippery pair. Rapier averages the two
- * materials in a contact, so this and BOWL_FRICTION meet at 0.175: low enough
- * that a die skids and rolls down the wall instead of grabbing it and stopping
- * where it landed. Friction is what ends a throw here rather than restitution
- * — a glancing hit on the wall turns almost all of a die's speed into spin,
- * and the spin is then eaten by whatever it is rolling on.
+ * The die's moment of inertia about each of its own axes.
+ *
+ * A solid cube's is its mass times the square of its size over six, and this
+ * is deliberately half of that. Two dice of a size meet through their centres
+ * of mass, where a truthful inertia leaves almost nothing to turn the struck
+ * one and it simply slides away. What does turn it is the off-centre part of
+ * the hit — the friction at the contact, and the drag under its own base once
+ * it is moving — and lightening the inertia is what lets that part tip the die
+ * over an edge instead of shoving it across the floor. It cuts the spin a
+ * tumble costs by about a third, which is the difference between a hit that
+ * scatters the bowl and one that just rearranges it.
  */
-export const DIE_FRICTION = 0.2
+export const DIE_INERTIA = DIE_MASS * DIE_SIZE * DIE_SIZE / 12
+
+/**
+ * Polished resin on lacquer. Rapier averages the two materials in a contact,
+ * so this and BOWL_FRICTION meet at 0.3 against the bowl, while two dice meet
+ * at the full 0.45.
+ *
+ * The die-on-die figure is what this is set by, and it is the other half of
+ * the tumble: friction is the only thing that puts a sideways impulse on a
+ * struck die, and a sideways impulse is the only torque a head-on hit has to
+ * offer. Below about this it skates off intact; at it, it catches and rolls.
+ *
+ * Friction is also what ends a throw here rather than restitution — a glancing
+ * hit on the wall turns almost all of a die's speed into spin, and the spin is
+ * then eaten by whatever it is rolling on. Raising it therefore costs reach:
+ * a die coming down the wall grabs sooner than it used to and settles closer
+ * to where it first landed.
+ */
+export const DIE_FRICTION = 0.45
 
 /**
  * Averaged with BOWL_RESTITUTION to 0.45, which returns about a fifth of the
@@ -236,10 +267,13 @@ export const FELT_DEPTH = 20
 export const THROW_MIN_DRAG = 1.2 // Dead zone: a bare click throws nothing at all
 
 /**
- * The angle of the drawn line, and so how high above the drag's end the die is
- * launched from. Not the angle the die actually arrives at: the flight is
- * lifted off this line by the gravity it has to give back, so it comes down
- * steeper than this — about 73° at the shortest throw and 53° at the longest.
+ * How high the die is launched from, as an angle over the length of the drag.
+ *
+ * Not quite the angle of the drawn line: the launch is lifted back along the
+ * camera's own ray rather than straight up, so the line comes out a little
+ * steeper than this. Nor the angle the die arrives at: the flight is lifted
+ * off the line by the gravity it has to give back, so it comes down steeper
+ * again — about 73° at the shortest throw and 53° at the longest.
  *
  * Fixing the angle rather than the height is what keeps the line's length
  * proportional to the drag across the table. A fixed height would make a short
@@ -257,19 +291,32 @@ export const THROW_MIN_DRAG = 1.2 // Dead zone: a bare click throws nothing at a
 export const THROW_DESCENT_ANGLE = Math.PI / 3.6 // 50°
 
 /**
- * How high a die is launched from when the drag ends over the bowl rather than
- * beside it. The line's own angle would put the launch inside the wall there,
- * and a body that starts inside solid geometry is spat back out of it.
+ * How high a die is launched from when the launch lands over the bowl rather
+ * than beside it. The line's own angle would put it inside the wall there, and
+ * a body that starts inside solid geometry is spat back out of it. Clear of
+ * the bead by more than a die's width, so at this height there is no bowl left
+ * anywhere for a die to start inside of.
  */
 export const THROW_CLEARANCE_HEIGHT = 5.4
 
 /**
- * How far from the axis a drag has to end before the line's own angle is
- * allowed to set the launch height. Inside it the bowl is in the way and
+ * How far from the axis the launch has to be before the line's own angle is
+ * allowed to set its height. Inside it the bowl is in the way and
  * THROW_CLEARANCE_HEIGHT applies instead — a die's width past the bead, so it
  * is the whole body that clears the bowl and not just its centre.
  */
 export const THROW_CLEARANCE_RADIUS = BOWL_RIM_RADIUS + DIE_SIZE
+
+/**
+ * How far below the camera the launch is held.
+ *
+ * The launch climbs with the length of the drag, and a long drag seen from a
+ * low camera asks for one above the camera itself — which, along a ray that
+ * only ever descends, is behind the viewer. The throw is flattened rather than
+ * allowed to get there: it comes out harder and shallower than the angle asked
+ * for, which is the least bad answer to a gesture that has run out of room.
+ */
+export const THROW_LAUNCH_CAMERA_MARGIN = 2
 
 /**
  * How long every throw spends in the air, whatever its length.

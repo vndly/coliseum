@@ -10,6 +10,7 @@ import {AIM_DOT_COUNT,
   THROW_CLEARANCE_RADIUS,
   THROW_DESCENT_ANGLE,
   THROW_FLIGHT_TIME,
+  THROW_LAUNCH_CAMERA_MARGIN,
   THROW_MAX_RADIUS,
   THROW_MIN_DRAG} from '@/scene/dimensions'
 
@@ -26,7 +27,9 @@ import {AIM_DOT_COUNT,
  *
  * Only the ground is dragged over; the launch itself is lifted off it at a
  * fixed angle, which is what lets the line clear the near rim and drop into
- * the bowl instead of running into the outside of it.
+ * the bowl instead of running into the outside of it. That lift runs back
+ * along the camera's ray rather than straight up, so however high it climbs
+ * the line still begins exactly under the pointer.
  *
  * The press is projected onto whatever is actually under the pointer — the
  * inside of the bowl, its rim, or the felt — rather than onto the table plane,
@@ -55,6 +58,7 @@ export class ThrowController {
   private readonly launchVelocity = new Vector3()
   private readonly rayEnd = new Vector3() // Scratch, for casting the camera's ray
   private readonly contactPoint = new Vector3() // Scratch, for clipping the line
+  private readonly launchRay = new Vector3() // Scratch, for lifting the launch
   private readonly downPointers = new Set<number>() // Every pointer currently held down
   private activePointer: number | null = null // Null whenever no throw is being aimed
 
@@ -281,11 +285,20 @@ export class ThrowController {
       return false
     }
 
-    this.launchOrigin.set(
-      this.launchGround.x,
-      this.launchHeight(dragLength),
-      this.launchGround.z,
-    )
+    this.liftLaunch(this.targetPoint.y + dragLength * Math.tan(THROW_DESCENT_ANGLE))
+
+    // The angle's own height can leave the launch inside the bowl's wall, and
+    // a body that starts inside solid geometry is spat back out of it. Tested
+    // on the launch itself rather than on where the drag ended, because
+    // lifting it along the ray is what carries it over the bowl in the first
+    // place. Lifting again can only carry it further in, so once at the
+    // clearance height — which is above every part of the bowl — it is clear
+    // wherever it has ended up.
+    const radius = Math.hypot(this.launchOrigin.x, this.launchOrigin.z)
+
+    if (radius < THROW_CLEARANCE_RADIUS && this.launchOrigin.y < THROW_CLEARANCE_HEIGHT) {
+      this.liftLaunch(THROW_CLEARANCE_HEIGHT)
+    }
 
     // Solved from a fixed flight time rather than a fixed speed. That is what
     // makes the speed proportional to the line's length — a longer line is a
@@ -301,24 +314,49 @@ export class ThrowController {
   }
 
   /**
-   * How high above the table the die is launched from, for a drag of the given
-   * length across it.
+   * Puts the launch at the given height above the table, and directly under
+   * the pointer on screen.
    *
-   * The angle sets the height, except where the drag has ended over the bowl:
-   * there the height the angle asks for would be somewhere inside the wall, so
-   * the die is dropped in from over the rim instead.
-   * @param dragLength - How far the drag reached across the ground
-   * @returns The launch height, above the table
+   * Lifted back along the camera's own ray rather than straight up off the
+   * ground the drag ended on. A raised point does not project to the same
+   * place on screen as the ground beneath it, so a vertical lift draws the
+   * line's tail beside the pointer rather than under it — and, since the lift
+   * grows with the drag, sliding further out the longer the drag gets, which
+   * reads as the line running away from the hand holding it. Backing off along
+   * the ray pins the tail to the pointer at any camera angle, and costs only a
+   * throw slightly steeper than the angle asked for.
+   * @param height - How high above the table the launch is to sit
    */
-  private launchHeight(dragLength: number): number {
-    const height = this.targetPoint.y + dragLength * Math.tan(THROW_DESCENT_ANGLE)
-    const radius = Math.hypot(this.launchGround.x, this.launchGround.z)
+  private liftLaunch(height: number): void {
+    // Aimed at where the drag was allowed to reach rather than at the pointer
+    // itself. The two are the same ray until the drag runs past the throw
+    // radius and is clamped back to it, and from there they have to differ:
+    // lifting along the pointer's ray from a point no longer on it walks off
+    // in a direction neither of them meant, far enough on a long drag to cross
+    // the axis and turn the throw around. Held at the limit instead, which is
+    // where the drag itself stopped.
+    const direction = this.launchRay
+      .subVectors(this.launchGround, this.camera.position)
+      .normalize()
 
-    if (radius >= THROW_CLEARANCE_RADIUS) {
-      return height
+    // A launch above the camera lies behind it along a ray that only descends
+    const lifted = Math.min(height, this.camera.position.y - THROW_LAUNCH_CAMERA_MARGIN)
+
+    // The camera is always above the table it is looking at, so the ray always
+    // descends. Guarded all the same: a level ray divides by zero and takes
+    // the launch to infinity.
+    if (direction.y >= 0) {
+      this.launchOrigin.set(this.launchGround.x, lifted, this.launchGround.z)
+
+      return
     }
 
-    return Math.max(height, THROW_CLEARANCE_HEIGHT)
+    // Scaling a descending direction by a positive height gives a negative
+    // multiplier, which is what walks back up the ray toward the camera
+    this.launchOrigin
+      .copy(direction)
+      .multiplyScalar(lifted / direction.y)
+      .add(this.launchGround)
   }
 
   /**
