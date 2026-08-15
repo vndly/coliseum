@@ -4,28 +4,36 @@ import type {AimPreview} from '@/scene/aim_preview'
 import type {Dice} from '@/scene/dice'
 import type {PhysicsWorld} from '@/scene/physics_world'
 import {AIM_DOT_COUNT,
-  AIM_SAMPLE_INTERVAL,
+  CAMERA_FAR,
   GRAVITY,
-  THROW_ELEVATION_ANGLE,
-  THROW_LAUNCH_HEIGHT,
-  THROW_MAX_DRAG,
-  THROW_MAX_LAUNCH_RADIUS,
-  THROW_MAX_SPEED,
-  THROW_MIN_DRAG,
-  THROW_MIN_SPEED} from '@/scene/dimensions'
+  THROW_CLEARANCE_HEIGHT,
+  THROW_CLEARANCE_RADIUS,
+  THROW_DESCENT_ANGLE,
+  THROW_FLIGHT_TIME,
+  THROW_MAX_RADIUS,
+  THROW_MIN_DRAG} from '@/scene/dimensions'
 
 /**
  * Turns a drag across the canvas into a thrown die.
  *
- * Both ends of the drag are projected onto the table, so the gesture is drawn
- * in the same space the die flies through: the die is launched from above
- * where the drag began, along the drag, and the length of the drag is its
- * strength. That makes the throw independent of where the camera happens to be
- * orbited to, for free.
+ * The gesture is drawn backwards from the result: the press lands on the spot
+ * the die is to arrive at, and the drag pulls back to the spot it is to be
+ * thrown from. The line between the two is the throw itself — its direction is
+ * where the die goes, and its length is both how far the die travels and, at a
+ * fixed flight time, how fast it is thrown. Both ends are projected into the
+ * scene, so the gesture is drawn in the same space the die flies through and
+ * the throw is independent of where the camera happens to be orbited to.
  *
- * Strength is linear in the drag and deliberately not calibrated so that the
- * die lands where the pointer was released. The drag is a strength stick, not
- * a target; the arc is what says where the die will go.
+ * Only the ground is dragged over; the launch itself is lifted off it at a
+ * fixed angle, which is what lets the line clear the near rim and drop into
+ * the bowl instead of running into the outside of it.
+ *
+ * The press is projected onto whatever is actually under the pointer — the
+ * inside of the bowl, its rim, or the felt — rather than onto the table plane,
+ * because the whole promise of the gesture is that the die lands where it was
+ * pointed. The release is projected onto the table plane instead: it only ever
+ * supplies the ground beneath the launch, and reading it off the near rim
+ * whenever the drag crossed the bowl would make the throw jump.
  *
  * Listeners are bound to the canvas here rather than in the component, in the
  * same way the orbit controls bind their own. Vue owns the element and this
@@ -41,11 +49,12 @@ export class ThrowController {
   private readonly raycaster = new Raycaster()
   private readonly table = new Plane(new Vector3(0, 1, 0), 0) // The felt, at height zero
   private readonly pointer = new Vector2() // Normalised device coordinates
-  private readonly pressPoint = new Vector3() // Where the drag began, on the table
-  private readonly dragPoint = new Vector3() // Where it has reached, on the table
+  private readonly targetPoint = new Vector3() // Where the die is to land
+  private readonly launchGround = new Vector3() // The table under where it is thrown from
   private readonly launchOrigin = new Vector3()
   private readonly launchVelocity = new Vector3()
-  private readonly contactPoint = new Vector3() // Scratch, for clipping the arc
+  private readonly rayEnd = new Vector3() // Scratch, for casting the camera's ray
+  private readonly contactPoint = new Vector3() // Scratch, for clipping the line
   private readonly downPointers = new Set<number>() // Every pointer currently held down
   private activePointer: number | null = null // Null whenever no throw is being aimed
 
@@ -78,8 +87,8 @@ export class ThrowController {
   }
 
   /**
-   * Begins aiming. Bound as a field so it can be added and removed as a
-   * listener without losing its receiver.
+   * Begins aiming, at the spot the die is to land on. Bound as a field so it
+   * can be added and removed as a listener without losing its receiver.
    */
   private readonly onPointerDown = (event: PointerEvent): void => {
     // A primary pointer is by definition the first of a fresh gesture, so
@@ -110,17 +119,19 @@ export class ThrowController {
       return
     }
 
-    if (!this.projectToTable(event, this.pressPoint)) {
+    if (!this.projectToScene(event, this.targetPoint)) {
       return
     }
 
-    // Keep the launch where the camera is looking and the shadow map reaches,
+    // Keep the throw where the camera is looking and the shadow map reaches,
     // rather than wherever a grazing ray happened to meet the table
-    this.clampToLaunchRadius(this.pressPoint)
+    this.clampToThrowRadius(this.targetPoint)
 
     this.activePointer = event.pointerId
     this.canvas.setPointerCapture(event.pointerId)
-    this.dragPoint.copy(this.pressPoint)
+
+    // A line of no length, so the preview stays down until the drag is a throw
+    this.launchGround.set(this.targetPoint.x, 0, this.targetPoint.z)
     this.updatePreview()
   }
 
@@ -129,10 +140,11 @@ export class ThrowController {
       return
     }
 
-    if (!this.projectToTable(event, this.dragPoint)) {
+    if (!this.projectToTable(event, this.launchGround)) {
       return
     }
 
+    this.clampToThrowRadius(this.launchGround)
     this.updatePreview()
   }
 
@@ -143,8 +155,12 @@ export class ThrowController {
       return
     }
 
-    if (this.projectToTable(event, this.dragPoint) && this.buildLaunch()) {
-      this.dice.throw(this.physics, this.launchOrigin, this.launchVelocity)
+    if (this.projectToTable(event, this.launchGround)) {
+      this.clampToThrowRadius(this.launchGround)
+
+      if (this.buildLaunch()) {
+        this.dice.throw(this.physics, this.launchOrigin, this.launchVelocity)
+      }
     }
 
     this.cancel()
@@ -159,7 +175,7 @@ export class ThrowController {
   }
 
   /**
-   * Abandons the throw being aimed, if there is one, and takes the arc down.
+   * Abandons the throw being aimed, if there is one, and takes the line down.
    */
   private cancel(): void {
     if (this.activePointer !== null && this.canvas.hasPointerCapture(this.activePointer)) {
@@ -171,12 +187,11 @@ export class ThrowController {
   }
 
   /**
-   * Finds where a pointer event lands on the table.
-   * @param event - The event to project
-   * @param target - Receives the point on the table
-   * @returns Whether the ray met the table at all
+   * Points the raycaster at whatever a pointer event is over.
+   * @param event - The event to aim at
+   * @returns Whether the canvas has a size to measure the pointer against
    */
-  private projectToTable(event: PointerEvent, target: Vector3): boolean {
+  private aimRaycaster(event: PointerEvent): boolean {
     const bounds = this.canvas.getBoundingClientRect()
 
     if (bounds.width === 0 || bounds.height === 0) {
@@ -189,63 +204,125 @@ export class ThrowController {
     )
     this.raycaster.setFromCamera(this.pointer, this.camera)
 
+    return true
+  }
+
+  /**
+   * Finds the surface a pointer event is over — the bowl, a die already in
+   * play, or the felt.
+   * @param event - The event to project
+   * @param target - Receives the point on the surface
+   * @returns Whether the ray met anything at all
+   */
+  private projectToScene(event: PointerEvent, target: Vector3): boolean {
+    if (!this.aimRaycaster(event)) {
+      return false
+    }
+
+    const ray = this.raycaster.ray
+
+    this.rayEnd.copy(ray.direction).multiplyScalar(CAMERA_FAR).add(ray.origin)
+
+    if (this.physics.castSegment(ray.origin, this.rayEnd, target)) {
+      return true
+    }
+
+    // Rapier is still loading, or the pointer is off past the edge of the
+    // table. The plane the table lies in is the best answer left.
+    return ray.intersectPlane(this.table, target) !== null
+  }
+
+  /**
+   * Finds where a pointer event lands on the table's plane, through anything
+   * standing on it.
+   * @param event - The event to project
+   * @param target - Receives the point on the plane
+   * @returns Whether the ray met the plane at all
+   */
+  private projectToTable(event: PointerEvent, target: Vector3): boolean {
+    if (!this.aimRaycaster(event)) {
+      return false
+    }
+
     return this.raycaster.ray.intersectPlane(this.table, target) !== null
   }
 
   /**
-   * Pulls a point back inside the radius a throw may start from.
+   * Pulls a point back inside the radius a throw may reach.
    * @param point - The point to clamp, in place
    */
-  private clampToLaunchRadius(point: Vector3): void {
+  private clampToThrowRadius(point: Vector3): void {
     const radius = Math.hypot(point.x, point.z)
 
-    if (radius <= THROW_MAX_LAUNCH_RADIUS) {
+    if (radius <= THROW_MAX_RADIUS) {
       return
     }
 
-    const scale = THROW_MAX_LAUNCH_RADIUS / radius
+    const scale = THROW_MAX_RADIUS / radius
 
     point.x *= scale
     point.z *= scale
   }
 
   /**
-   * Works out where the die would be launched from, and how fast, for the drag
+   * Works out where the die would be launched from, and how fast, for the line
    * as it currently stands.
-   * @returns Whether the drag is long enough to be a throw at all
+   * @returns Whether the line is long enough to be a throw at all
    */
   private buildLaunch(): boolean {
-    const dragX = this.dragPoint.x - this.pressPoint.x
-    const dragZ = this.dragPoint.z - this.pressPoint.z
+    // Measured across the ground rather than along the line, because the line
+    // is never shorter than the launch height and a bare click would clear any
+    // dead zone stated in three dimensions
+    const dragX = this.launchGround.x - this.targetPoint.x
+    const dragZ = this.launchGround.z - this.targetPoint.z
     const dragLength = Math.hypot(dragX, dragZ)
 
     if (dragLength < THROW_MIN_DRAG) {
       return false
     }
 
-    const strength = Math.min(
-      (dragLength - THROW_MIN_DRAG) / (THROW_MAX_DRAG - THROW_MIN_DRAG),
-      1,
+    this.launchOrigin.set(
+      this.launchGround.x,
+      this.launchHeight(dragLength),
+      this.launchGround.z,
     )
-    const speed = THROW_MIN_SPEED + (THROW_MAX_SPEED - THROW_MIN_SPEED) * strength
 
-    // The elevation is fixed at every strength, so the drag only ever has to
-    // supply a direction and a scale. Dividing by the drag's length is what
-    // normalises it into one.
-    const horizontal = Math.cos(THROW_ELEVATION_ANGLE) * speed / dragLength
-
-    this.launchOrigin.set(this.pressPoint.x, THROW_LAUNCH_HEIGHT, this.pressPoint.z)
-    this.launchVelocity.set(
-      dragX * horizontal,
-      Math.sin(THROW_ELEVATION_ANGLE) * speed,
-      dragZ * horizontal,
-    )
+    // Solved from a fixed flight time rather than a fixed speed. That is what
+    // makes the speed proportional to the line's length — a longer line is a
+    // harder throw, not a longer one — and what holds the flight close to the
+    // straight line the preview draws, since the only thing separating the two
+    // is the gravity the second term gives back.
+    this.launchVelocity
+      .subVectors(this.targetPoint, this.launchOrigin)
+      .divideScalar(THROW_FLIGHT_TIME)
+    this.launchVelocity.y -= GRAVITY * THROW_FLIGHT_TIME / 2
 
     return true
   }
 
   /**
-   * Redraws the arc for the current drag, or takes it down while the drag is
+   * How high above the table the die is launched from, for a drag of the given
+   * length across it.
+   *
+   * The angle sets the height, except where the drag has ended over the bowl:
+   * there the height the angle asks for would be somewhere inside the wall, so
+   * the die is dropped in from over the rim instead.
+   * @param dragLength - How far the drag reached across the ground
+   * @returns The launch height, above the table
+   */
+  private launchHeight(dragLength: number): number {
+    const height = this.targetPoint.y + dragLength * Math.tan(THROW_DESCENT_ANGLE)
+    const radius = Math.hypot(this.launchGround.x, this.launchGround.z)
+
+    if (radius >= THROW_CLEARANCE_RADIUS) {
+      return height
+    }
+
+    return Math.max(height, THROW_CLEARANCE_HEIGHT)
+  }
+
+  /**
+   * Redraws the line for the current drag, or takes it down while the drag is
    * still inside the dead zone — which is the only sign that a release would
    * throw nothing.
    */
@@ -256,46 +333,28 @@ export class ThrowController {
       return
     }
 
-    this.preview.show(this.sampleArc())
+    this.preview.show(this.sampleLine())
   }
 
   /**
-   * Samples the trajectory the throw would follow, stopping at the first thing
-   * it meets. It is the true path up to that contact and deliberately no
-   * further: what the die does after its first bounce is the simulation's
-   * business, not something worth promising in advance.
-   * @returns The arc, from the launch point to the point of first contact
+   * Samples the line the throw would follow, stopping at the first thing in
+   * the way. It is the path up to that contact and deliberately no further:
+   * what the die does after its first bounce is the simulation's business, not
+   * something worth promising in advance.
+   * @returns The line, from the launch point to the point of first contact
    */
-  private sampleArc(): Vector3[] {
-    const points: Vector3[] = [this.launchOrigin.clone()]
-    const previous = this.launchOrigin.clone()
+  private sampleLine(): Vector3[] {
+    const hit = this.physics.castSegment(this.launchOrigin, this.targetPoint, this.contactPoint)
+    const end = hit ? this.contactPoint : this.targetPoint
 
-    for (let index = 1; index < AIM_DOT_COUNT; index++) {
-      const time = index * AIM_SAMPLE_INTERVAL
-      const point = new Vector3(
-        this.launchOrigin.x + this.launchVelocity.x * time,
-        this.launchOrigin.y + this.launchVelocity.y * time + GRAVITY * time * time / 2,
-        this.launchOrigin.z + this.launchVelocity.z * time,
-      )
+    const points: Vector3[] = []
 
-      // The felt is a sensor and stops no ray, so the table is the one surface
-      // clipped against by hand. Everything solid is left to the cast below.
-      if (point.y <= 0) {
-        const fraction = previous.y / (previous.y - point.y)
-
-        points.push(previous.clone().lerp(point, fraction))
-
-        break
-      }
-
-      if (this.physics.castSegment(previous, point, this.contactPoint)) {
-        points.push(this.contactPoint.clone())
-
-        break
-      }
-
-      points.push(point)
-      previous.copy(point)
+    for (let index = 0; index < AIM_DOT_COUNT; index++) {
+      points.push(new Vector3().lerpVectors(
+        this.launchOrigin,
+        end,
+        index / (AIM_DOT_COUNT - 1),
+      ))
     }
 
     return points

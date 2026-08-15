@@ -44,7 +44,8 @@ import {BACKGROUND_COLOR,
   KEY_LIGHT_SHADOW_FAR,
   KEY_LIGHT_SHADOW_MAP_SIZE,
   KEY_LIGHT_SHADOW_NEAR,
-  KEY_LIGHT_SHADOW_NORMAL_BIAS} from '@/scene/dimensions'
+  KEY_LIGHT_SHADOW_NORMAL_BIAS,
+  MAX_FRAME_TIME} from '@/scene/dimensions'
 
 const MAX_PIXEL_RATIO = 2 // Past this, cost climbs and nobody can see the difference
 
@@ -192,8 +193,17 @@ export class DishScene {
     // Step first, then drag the meshes onto the bodies, so that what is drawn
     // is the state that was just simulated rather than the one before it.
     this.timer.update()
-    this.physics.step(this.timer.getDelta())
-    this.dice.update(this.physics)
+
+    // Capped before it is handed out rather than inside the simulation alone,
+    // so that the dice age by exactly as much time as the world just advanced.
+    // The frame that arrives on returning to a backgrounded tab is seconds
+    // long, and a die part way through leaving would otherwise finish leaving
+    // and be culled within it — vanishing between two frames, which is the one
+    // thing its exit exists to avoid.
+    const deltaTime = Math.min(this.timer.getDelta(), MAX_FRAME_TIME)
+
+    this.physics.step(deltaTime)
+    this.dice.update(this.physics, deltaTime)
 
     this.renderer.render(this.scene, this.camera)
   }

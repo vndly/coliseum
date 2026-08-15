@@ -95,45 +95,45 @@ export class Dish {
 
     // Underside: recessed, so the bowl sits on its ring and not on its belly
     profile.add(new QuadraticBezierCurve(
-      new Vector2(0.00, 0.16),
-      new Vector2(1.10, 0.16),
-      new Vector2(1.30, 0.00),
+      new Vector2(0.00, 0.24),
+      new Vector2(1.65, 0.24),
+      new Vector2(1.95, 0.00),
     ))
 
     // Foot: the bearing ring, then a chamfer up off the table
-    profile.add(new LineCurve(new Vector2(1.30, 0.00), new Vector2(1.55, 0.00)))
-    profile.add(new LineCurve(new Vector2(1.55, 0.00), new Vector2(1.62, 0.02)))
-    profile.add(new LineCurve(new Vector2(1.62, 0.02), new Vector2(1.75, 0.18)))
+    profile.add(new LineCurve(new Vector2(1.95, 0.00), new Vector2(2.33, 0.00)))
+    profile.add(new LineCurve(new Vector2(2.33, 0.00), new Vector2(2.43, 0.03)))
+    profile.add(new LineCurve(new Vector2(2.43, 0.03), new Vector2(2.63, 0.27)))
 
     // Outside wall: swells away from the foot, straightening toward the rim
     profile.add(new CubicBezierCurve(
-      new Vector2(1.75, 0.18),
-      new Vector2(2.75, 0.72),
-      new Vector2(3.42, 1.55),
-      new Vector2(3.50, 2.62),
+      new Vector2(2.63, 0.27),
+      new Vector2(4.13, 1.08),
+      new Vector2(5.13, 2.33),
+      new Vector2(5.25, 3.93),
     ))
 
     // Rim bead: rolled over the top, outside edge to inside edge
     profile.add(new CubicBezierCurve(
-      new Vector2(3.50, 2.62),
-      new Vector2(3.50, 2.86),
-      new Vector2(3.26, 2.86),
-      new Vector2(3.26, 2.62),
+      new Vector2(5.25, 3.93),
+      new Vector2(5.25, 4.29),
+      new Vector2(4.89, 4.29),
+      new Vector2(4.89, 3.93),
     ))
 
     // Inside wall: near vertical at the rim, shallow as it meets the floor
     profile.add(new CubicBezierCurve(
-      new Vector2(3.26, 2.62),
-      new Vector2(2.95, 1.70),
-      new Vector2(2.75, 0.72),
-      new Vector2(2.00, 0.50),
+      new Vector2(4.89, 3.93),
+      new Vector2(4.43, 2.55),
+      new Vector2(4.13, 1.08),
+      new Vector2(3.00, 0.75),
     ))
 
     // Inside base: eases out of the wall and flattens under the dice
     profile.add(new QuadraticBezierCurve(
-      new Vector2(2.00, 0.50),
-      new Vector2(1.55, 0.35),
-      new Vector2(0.00, 0.35),
+      new Vector2(3.00, 0.75),
+      new Vector2(2.33, 0.53),
+      new Vector2(0.00, 0.53),
     ))
 
     return profile.getPoints(BOWL_PROFILE_DIVISIONS)

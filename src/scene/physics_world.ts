@@ -1,18 +1,20 @@
 import {ActiveEvents,
   ColliderDesc,
-  QueryFilterFlags,
+  EventQueue,
   Ray,
   TriMeshFlags,
   World,
   init} from '@dimforge/rapier3d-compat'
-import type {Collider} from '@dimforge/rapier3d-compat'
+import type {Collider, ColliderHandle} from '@dimforge/rapier3d-compat'
 import {Vector3} from 'three'
 import type {BufferGeometry} from 'three'
 import {BOWL_FRICTION,
   BOWL_RESTITUTION,
-  FELT_SENSOR_DEPTH,
+  FELT_DEPTH,
+  FELT_FRICTION,
+  FELT_RESTITUTION,
   GRAVITY,
-  PHYSICS_MAX_STEPS_PER_FRAME,
+  MAX_FRAME_TIME,
   PHYSICS_TIMESTEP,
   TABLE_SIZE} from '@/scene/dimensions'
 
@@ -31,7 +33,9 @@ import {BOWL_FRICTION,
  */
 export class PhysicsWorld {
   private simulation: World | null = null // Null until the WASM module has loaded
-  private felt: Collider | null = null // Sensor; anything reaching it is out of play
+  private felt: Collider | null = null // The table; the one collider that reports events
+  private events: EventQueue | null = null // Created with the world, and drained by hand
+  private readonly landed: ColliderHandle[] = [] // Whatever first touched the felt this frame
   private accumulatedTime = 0 // Frame time left over, waiting for a whole step
   private disposed = false
   private readonly rayDirection = new Vector3() // Scratch, to keep casts allocation free
@@ -63,6 +67,11 @@ export class PhysicsWorld {
     PhysicsWorld.buildBowl(simulation, bowlGeometry)
 
     this.felt = PhysicsWorld.buildFelt(simulation)
+
+    // Deliberately not auto-draining. A frame runs several fixed steps, and an
+    // auto-drained queue is emptied at the start of every one of them, so
+    // every landing but the last would be discarded before it could be read.
+    this.events = new EventQueue(false)
     this.simulation = simulation
   }
 
@@ -77,44 +86,42 @@ export class PhysicsWorld {
    */
   step(deltaTime: number): void {
     const simulation = this.simulation
+    const events = this.events
 
-    if (simulation === null) {
+    if (simulation === null || events === null) {
       return
     }
 
+    this.landed.length = 0
     this.accumulatedTime += deltaTime
 
     // A backgrounded tab hands back one enormous frame. Capping the backlog
     // spends what it can and drops the rest, rather than stalling for seconds
     // simulating a stretch of time nobody watched.
-    this.accumulatedTime = Math.min(
-      this.accumulatedTime,
-      PHYSICS_TIMESTEP * PHYSICS_MAX_STEPS_PER_FRAME,
-    )
+    this.accumulatedTime = Math.min(this.accumulatedTime, MAX_FRAME_TIME)
 
     while (this.accumulatedTime >= PHYSICS_TIMESTEP) {
-      simulation.step()
+      simulation.step(events)
       this.accumulatedTime -= PHYSICS_TIMESTEP
     }
+
+    this.collectLandings()
   }
 
   /**
-   * Visits every collider currently touching the felt, which is every die that
-   * has left play.
-   * @param visit - Called once per collider intersecting the felt sensor
+   * Visits every collider that reached the felt during this frame's steps,
+   * which is every die that has just left play.
+   * @param visit - Called once per collider that landed on the table
    */
-  forEachColliderOnFelt(visit: (collider: Collider) => void): void {
-    if (this.simulation === null || this.felt === null) {
-      return
+  forEachColliderLandedOnFelt(visit: (collider: ColliderHandle) => void): void {
+    for (const collider of this.landed) {
+      visit(collider)
     }
-
-    this.simulation.intersectionPairsWith(this.felt, visit)
   }
 
   /**
-   * Finds where a segment first meets something solid — the bowl, or a die
-   * already in it. The felt is excluded, being a sensor: the aim preview stops
-   * itself at the table.
+   * Finds where a segment first meets something solid — the bowl, the table,
+   * or a die already in play.
    * @param from - Where the segment starts
    * @param to - Where the segment ends
    * @param target - Receives the point of contact, when there is one
@@ -128,12 +135,7 @@ export class PhysicsWorld {
     // Casting along the un-normalised segment puts the time of impact in
     // [0, 1] over its length, so a maximum of one covers it exactly.
     const direction = this.rayDirection.subVectors(to, from)
-    const hit = this.simulation.castRay(
-      new Ray(from, direction),
-      1,
-      true,
-      QueryFilterFlags.EXCLUDE_SENSORS,
-    )
+    const hit = this.simulation.castRay(new Ray(from, direction), 1, true)
 
     if (hit === null) {
       return false
@@ -150,9 +152,49 @@ export class PhysicsWorld {
    */
   dispose(): void {
     this.disposed = true
+    this.events?.free()
+    this.events = null
     this.simulation?.free()
     this.simulation = null
     this.felt = null
+
+    // Handles into a world that no longer exists. Nothing reads them after
+    // the loop stops, but this class is usable either side of having a world
+    // and every other member of it says so.
+    this.landed.length = 0
+  }
+
+  /**
+   * Drains the frame's collision events into the list of colliders that have
+   * just reached the felt.
+   *
+   * The felt is the only collider asking for events, so every event reported
+   * is one of its own, and an event that ends a contact rather than starting
+   * one is a die being shoved off the table by another, not a landing.
+   *
+   * Which half of the pair is the felt is tested rather than inferred. Reading
+   * "not the felt" as "a die" would be right today and quietly wrong the moment
+   * anything else in the world asked for events of its own.
+   */
+  private collectLandings(): void {
+    const events = this.events
+    const felt = this.felt
+
+    if (events === null || felt === null) {
+      return
+    }
+
+    events.drainCollisionEvents((first, second, started) => {
+      if (!started) {
+        return
+      }
+
+      if (first === felt.handle) {
+        this.landed.push(second)
+      } else if (second === felt.handle) {
+        this.landed.push(first)
+      }
+    })
   }
 
   /**
@@ -184,18 +226,21 @@ export class PhysicsWorld {
   }
 
   /**
-   * Installs the felt as a sensor whose top face sits exactly at table height.
+   * Installs the felt as a solid slab whose top face sits exactly at table
+   * height. It is the only collider that reports collision events, which makes
+   * every event the engine produces a die arriving at or leaving the table.
    * @param simulation - The world to add the collider to
-   * @returns The sensor, kept so it can be polled for what is touching it
+   * @returns The felt, kept so its own events can be told from a die's
    */
   private static buildFelt(simulation: World): Collider {
     const descriptor = ColliderDesc.cuboid(
       TABLE_SIZE / 2,
-      FELT_SENSOR_DEPTH / 2,
+      FELT_DEPTH / 2,
       TABLE_SIZE / 2,
     )
-      .setTranslation(0, -FELT_SENSOR_DEPTH / 2, 0)
-      .setSensor(true)
+      .setTranslation(0, -FELT_DEPTH / 2, 0)
+      .setFriction(FELT_FRICTION)
+      .setRestitution(FELT_RESTITUTION)
       .setActiveEvents(ActiveEvents.COLLISION_EVENTS)
 
     return simulation.createCollider(descriptor)

@@ -9,7 +9,8 @@ import {DIE_ANGULAR_DAMPING,
   DIE_LAUNCH_SPIN,
   DIE_LINEAR_DAMPING,
   DIE_RESTITUTION,
-  DIE_SIZE} from '@/scene/dimensions'
+  DIE_SIZE,
+  DIE_VANISH_DURATION} from '@/scene/dimensions'
 
 /**
  * One die in flight: a rigid body, and the meshes that are dragged along
@@ -19,14 +20,17 @@ import {DIE_ANGULAR_DAMPING,
  * bowl draws the same geometry and the same two materials — a die owns its
  * place in the world, not the shape it is drawn with.
  *
- * Continuous collision detection is on. A die is roughly a unit across and
- * leaves the hand at up to a hundred units a second, which is far enough per
- * step to pass clean through the bowl's wall without it.
+ * Continuous collision detection is on. A die is roughly a unit across and the
+ * longest throw leaves the hand at about 145 units a second, which is more
+ * than its own width per step — far enough to pass clean through the bowl's
+ * wall, which is thinner than that.
  */
 export class Die {
   private readonly meshes: Object3D // The visual half, positioned from the body
   private readonly body: RigidBody
   private readonly collider: ColliderHandle // Cached, so it survives the body's removal
+  private outOfPlay = false // Set once the die has reached the table
+  private vanished = 0 // How far through its exit the die is, from zero to one
 
   constructor(world: World, meshes: Object3D, origin: Vector3, velocity: Vector3) {
     this.meshes = meshes
@@ -69,6 +73,23 @@ export class Die {
   }
 
   /**
+   * Whether nothing of the die is left to draw, and it can be taken out of the
+   * world.
+   */
+  get isSpent(): boolean {
+    return this.vanished >= 1
+  }
+
+  /**
+   * Records that the die has landed on the table and is no longer in play. It
+   * keeps being simulated all the same: it is only taken away once it has come
+   * to rest, and being shoved about by the next die to land is part of that.
+   */
+  markOutOfPlay(): void {
+    this.outOfPlay = true
+  }
+
+  /**
    * Copies the simulated transform onto the meshes. The body is the authority;
    * nothing ever writes back the other way.
    */
@@ -78,6 +99,30 @@ export class Die {
 
     this.meshes.position.set(translation.x, translation.y, translation.z)
     this.meshes.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w)
+  }
+
+  /**
+   * Advances the die's exit, if it has one to make.
+   *
+   * A die that has left play waits for the engine to put its body to sleep,
+   * which is the engine's own answer to the question of whether it has stopped
+   * moving, and then shrinks away. Once the shrinking has begun it finishes,
+   * even if another die arrives and wakes the body up again — an exit that
+   * could be interrupted would let a busy corner of the table keep a die
+   * flickering back into existence.
+   * @param deltaTime - Seconds elapsed since the previous frame
+   */
+  advanceExit(deltaTime: number): void {
+    if (!this.outOfPlay || (this.vanished === 0 && !this.body.isSleeping())) {
+      return
+    }
+
+    this.vanished = Math.min(this.vanished + deltaTime / DIE_VANISH_DURATION, 1)
+
+    // Squared, so the die holds its size for a moment and then goes quickly.
+    // A die shrinking at a constant rate reads as deflating rather than as
+    // being taken off the table.
+    this.meshes.scale.setScalar(1 - this.vanished * this.vanished)
   }
 
   /**

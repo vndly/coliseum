@@ -28,9 +28,10 @@ import {DIE_CLEARCOAT,
  * Every die in play, and the shape they are all drawn with.
  *
  * Dice accumulate: a throw adds one, and nothing removes it until it reaches
- * the felt. Nothing bounds the pile either, because the bowl does that on its
- * own — fill it and the next throw spills, and the felt culls the spill. The
- * hard limit is a guard against a spammed pointer, not a rule of the game.
+ * the felt and settles there. Nothing bounds the pile either, because the bowl
+ * does that on its own — fill it and the next throw spills, and the felt culls
+ * the spill. The hard limit is a guard against a spammed pointer, not a rule
+ * of the game.
  *
  * One geometry and one pair of materials are built here and shared by every
  * die, so a bowl full of them costs a draw call each and no memory at all.
@@ -42,7 +43,6 @@ export class Dice {
   private readonly bodyMaterial: MeshPhysicalMaterial
   private readonly pipMaterial: MeshPhysicalMaterial
   private readonly dice: Die[] = []
-  private readonly spent: number[] = [] // Collider handles culled this frame
 
   constructor() {
     this.group = new Group()
@@ -97,16 +97,21 @@ export class Dice {
   }
 
   /**
-   * Culls whatever has reached the felt, then drags the surviving meshes onto
-   * their bodies. Called once per rendered frame, after the world has stepped.
+   * Marks whatever has just reached the felt, drags every mesh onto its body,
+   * and removes the dice that have finished leaving. Called once per rendered
+   * frame, after the world has stepped.
    * @param physics - The world the dice are simulated in
+   * @param deltaTime - Seconds elapsed since the previous frame
    */
-  update(physics: PhysicsWorld): void {
-    this.cull(physics)
+  update(physics: PhysicsWorld, deltaTime: number): void {
+    this.markLandings(physics)
 
     for (const die of this.dice) {
       die.synchronize()
+      die.advanceExit(deltaTime)
     }
+
+    this.cull(physics)
   }
 
   /**
@@ -121,11 +126,28 @@ export class Dice {
   }
 
   /**
-   * Destroys every die touching the felt. A die in play only ever touches the
-   * bowl, so reaching the table is the whole of the out-of-play test — it
-   * covers a throw that fell short, one that sailed over, and one that bounced
-   * back out over the rim, without any of them being special cases.
-   * @param physics - The world to ask which colliders are on the felt
+   * Takes every die that has just landed on the felt out of play. A die in
+   * play only ever touches the bowl, so reaching the table is the whole of the
+   * out-of-play test — it covers a throw that fell short, one that sailed
+   * over, and one that bounced back out over the rim, without any of them
+   * being special cases.
+   * @param physics - The world to ask which colliders landed this frame
+   */
+  private markLandings(physics: PhysicsWorld): void {
+    physics.forEachColliderLandedOnFelt((collider) => {
+      for (const die of this.dice) {
+        if (die.colliderHandle === collider) {
+          die.markOutOfPlay()
+
+          break
+        }
+      }
+    })
+  }
+
+  /**
+   * Removes the dice that have finished shrinking away.
+   * @param physics - The world their bodies were created in
    */
   private cull(physics: PhysicsWorld): void {
     const world = physics.world
@@ -134,26 +156,18 @@ export class Dice {
       return
     }
 
-    this.spent.length = 0
+    // Walked backwards, so that splicing a die out cannot move one that has
+    // not been looked at yet past the cursor
+    for (let index = this.dice.length - 1; index >= 0; index--) {
+      const die = this.dice[index]
 
-    physics.forEachColliderOnFelt((collider) => {
-      this.spent.push(collider.handle)
-    })
-
-    if (this.spent.length === 0) {
-      return
-    }
-
-    // Iterated over a copy, because the culled dice are spliced out of the
-    // original as they go. Only ever taken on a frame that culls something.
-    for (const die of [...this.dice]) {
-      if (!this.spent.includes(die.colliderHandle)) {
+      if (die === undefined || !die.isSpent) {
         continue
       }
 
       this.group.remove(die.object)
       die.remove(world)
-      this.dice.splice(this.dice.indexOf(die), 1)
+      this.dice.splice(index, 1)
     }
   }
 

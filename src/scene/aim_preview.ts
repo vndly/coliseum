@@ -8,15 +8,17 @@ import {AIM_DOT_COLOR,
   AIM_DOT_SEGMENTS} from '@/scene/dimensions'
 
 /**
- * The dotted arc drawn under the pointer while a throw is being aimed.
+ * The dotted line drawn from the launch point to the spot the die will land
+ * on, while a throw is being aimed.
  *
- * The dots are spaced by time rather than by distance, so the gaps between
- * them are the strength of the throw: a hard throw stretches them out, a
- * gentle one bunches them together. They taper toward the far end, which is
- * the only thing distinguishing the start of the arc from its finish.
+ * The same number of dots is spread over the whole line however long it is, so
+ * the gaps between them are the strength of the throw: a hard throw is a long
+ * line and stretches them out, a gentle one bunches them together. They taper
+ * toward the landing end, which is the only thing distinguishing one end of
+ * the line from the other.
  *
- * One instanced mesh, sized once for the largest arc it will ever draw, so
- * aiming allocates nothing and costs one draw call.
+ * One instanced mesh, sized once for the longest line it will ever draw, so
+ * aiming costs one draw call however far the throw reaches.
  */
 export class AimPreview {
   private readonly dots: InstancedMesh
@@ -27,7 +29,7 @@ export class AimPreview {
   constructor() {
     this.geometry = new SphereGeometry(AIM_DOT_RADIUS, AIM_DOT_SEGMENTS, AIM_DOT_SEGMENTS / 2)
 
-    // Unlit, so the arc stays legible over the dark wood and the dark felt
+    // Unlit, so the line stays legible over the dark wood and the dark felt
     // alike. It is an instrument, not part of the scene, and it should not
     // pick up the key light as though it were.
     this.material = new MeshBasicMaterial({
@@ -35,9 +37,10 @@ export class AimPreview {
       transparent: true,
       opacity: AIM_DOT_OPACITY,
 
-      // Depth testing stays on, so the bowl properly hides the part of the arc
-      // that has gone behind its near wall. Depth writing comes off, so the
-      // dots do not occlude each other where the arc overlaps itself.
+      // Depth testing stays on, so the bowl properly hides the part of the
+      // line that has gone behind its near wall. Depth writing comes off, so
+      // that where two dots overlap on screen neither punches a hole in the
+      // other's translucency.
       depthWrite: false,
     })
 
@@ -46,7 +49,7 @@ export class AimPreview {
     this.dots.visible = false
 
     // The instances are rewritten on every pointer move and the bounding
-    // sphere is not, so leaving culling on would flicker the whole arc away
+    // sphere is not, so leaving culling on would flicker the whole line away
     // whenever its stale bounds left the frustum.
     this.dots.frustumCulled = false
   }
@@ -56,7 +59,7 @@ export class AimPreview {
   }
 
   /**
-   * Draws the arc through the given points, from the launch point to wherever
+   * Draws the line through the given points, from the launch point to wherever
    * the throw first meets something.
    * @param points - The sampled trajectory, in order, at most AIM_DOT_COUNT long
    */
