@@ -153,29 +153,31 @@ export const DIE_PIP_INSET = 0.07
 export const DIE_MASS = 1.0 // Every die is the same, so only the ratio to DIE_INERTIA matters
 
 /**
- * The die's moment of inertia about each of its own axes.
+ * The die's moment of inertia about each of its own axes: a solid cube's, which
+ * is its mass times the square of its size over six.
  *
- * A solid cube's is its mass times the square of its size over six, and this
- * is deliberately half of that. Two dice of a size meet through their centres
- * of mass, where a truthful inertia leaves almost nothing to turn the struck
- * one and it simply slides away. What does turn it is the off-centre part of
- * the hit — the friction at the contact, and the drag under its own base once
- * it is moving — and lightening the inertia is what lets that part tip the die
- * over an edge instead of shoving it across the floor. It cuts the spin a
- * tumble costs by about a third, which is the difference between a hit that
- * scatters the bowl and one that just rearranges it.
+ * Stated rather than left to the shape and a density only because a die's mass
+ * is stated, and the two have to be set together.
+ *
+ * Lightening it below the truthful figure looks like it should make a struck
+ * die easier to tip, and does the opposite. What turns a struck die is friction
+ * under its own base, and a lighter inertia holds less of the angular momentum
+ * that friction can put into it: the die spins up fast, spends the spin against
+ * the floor and stops flat. Halving this costs six percentage points of hits
+ * ending on a new face, and scatters the bowl further while doing it.
  */
-export const DIE_INERTIA = DIE_MASS * DIE_SIZE * DIE_SIZE / 12
+export const DIE_INERTIA = DIE_MASS * DIE_SIZE * DIE_SIZE / 6
 
 /**
  * Polished resin on lacquer. Rapier averages the two materials in a contact,
- * so this and BOWL_FRICTION meet at 0.3 against the bowl, while two dice meet
- * at the full 0.45.
+ * and BOWL_FRICTION matches this, so a die grips at the full 0.45 either way —
+ * against the bowl and against another die.
  *
- * The die-on-die figure is what this is set by, and it is the other half of
- * the tumble: friction is the only thing that puts a sideways impulse on a
- * struck die, and a sideways impulse is the only torque a head-on hit has to
- * offer. Below about this it skates off intact; at it, it catches and rolls.
+ * Friction is what makes a struck die roll rather than skate. A die is knocked
+ * across the floor with barely any spin of its own, and what turns it is the
+ * drag under its own base: the floor holds the bottom while the top keeps
+ * going, and the die goes over its leading edge. Below about this it slides
+ * away intact.
  *
  * Friction is also what ends a throw here rather than restitution — a glancing
  * hit on the wall turns almost all of a die's speed into spin, and the spin is
@@ -186,12 +188,26 @@ export const DIE_INERTIA = DIE_MASS * DIE_SIZE * DIE_SIZE / 12
 export const DIE_FRICTION = 0.45
 
 /**
- * Averaged with BOWL_RESTITUTION to 0.45, which returns about a fifth of the
- * energy of each bounce. Anything much below this and a die arrives, thuds
- * once and is finished; much above it and the first bounce clears the rim and
- * the bowl stops being able to hold anything.
+ * How hard two dice bounce off each other, and the one number that decides
+ * whether a hit rearranges the bowl or just nudges it.
+ *
+ * A die on the floor is pinned there by a gravity twenty times the real one,
+ * and it cannot roll without lifting its own centre of mass against it. The
+ * throw arrives descending between 53° and 73°, so a hit drives the struck die
+ * down into the floor rather than across it, and the floor takes back most of
+ * the impulse within a step or two. Bouncing the two dice apart hard enough to
+ * get the struck one off the floor for a moment is what gives it room to turn,
+ * and this is where the room runs out: dropping it to 0.5 takes half the lift
+ * back off the struck die, and a fifth of the hits that end on a new face with
+ * it.
+ *
+ * It is deliberately not what a die meets any other surface with. Rapier
+ * averages the two materials in a contact, so BOWL_RESTITUTION is set low to
+ * hold the die against the bowl at 0.45, and the felt asks for the minimum
+ * instead of the average so a die that reaches the table still stops dead
+ * there.
  */
-export const DIE_RESTITUTION = 0.5
+export const DIE_RESTITUTION = 0.8
 
 // Air does almost nothing to a die over a flight this short, and a die still
 // moving in the bowl should be slowed by what it is touching, not by the air
@@ -246,11 +262,37 @@ export const PHYSICS_MAX_STEPS_PER_FRAME = 8 // Cap, so a stalled tab cannot spi
  */
 export const MAX_FRAME_TIME = PHYSICS_TIMESTEP * PHYSICS_MAX_STEPS_PER_FRAME
 
-export const BOWL_FRICTION = 0.15
-export const BOWL_RESTITUTION = 0.4 // Lacquer over hard wood, which is livelier than it looks
+/**
+ * Set to the same figure as DIE_FRICTION, so a die grips the bowl exactly as
+ * well as it grips another die.
+ *
+ * Higher than lacquer over hard wood would really give, and deliberately: the
+ * drag under a die's own base is the only thing with any torque to tip it over,
+ * so a slippery floor turns every hit into a skate. Taking this down to a third
+ * of DIE_FRICTION, which is about honest for the material, leaves a struck die
+ * sliding a couple of die widths and stopping on the face it started on.
+ */
+export const BOWL_FRICTION = 0.45
+
+/**
+ * Low so that it can be. Rapier averages the two materials in a contact, and
+ * DIE_RESTITUTION is set high for the sake of dice hitting each other, so the
+ * bowl's own figure is whatever holds their average at the 0.45 the throw is
+ * tuned around — about a fifth of the energy returned per bounce. Much below
+ * that average a die arrives, thuds once and is finished; much above it the
+ * first bounce clears the rim and the bowl stops being able to hold anything.
+ */
+export const BOWL_RESTITUTION = 0.1
 
 export const FELT_FRICTION = 0.6 // Cloth, and the grippiest surface in the scene
-export const FELT_RESTITUTION = 0.08 // A die that reaches the table is meant to stop there
+
+/**
+ * A die that reaches the table is meant to stop there. Taken as the minimum of
+ * the two materials rather than the average, so this is what a die meets the
+ * felt with whatever DIE_RESTITUTION happens to be — see the felt's collider in
+ * PhysicsWorld.
+ */
+export const FELT_RESTITUTION = 0.08
 
 /**
  * How thick the table's collider is. It is solid rather than a sensor: a die

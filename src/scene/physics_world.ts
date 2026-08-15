@@ -1,4 +1,5 @@
 import {ActiveEvents,
+  CoefficientCombineRule,
   ColliderDesc,
   EventQueue,
   Ray,
@@ -229,6 +230,15 @@ export class PhysicsWorld {
    * Installs the felt as a solid slab whose top face sits exactly at table
    * height. It is the only collider that reports collision events, which makes
    * every event the engine produces a die arriving at or leaving the table.
+   *
+   * Its restitution is asked for as the minimum of the two materials rather
+   * than the average Rapier would otherwise take. A die is bouncy — it has to
+   * be, or a hit between two of them does nothing — and averaging that into the
+   * felt would leave a spilled die hopping across the table on its way to being
+   * culled. Two colliders that disagree about the rule are resolved in the
+   * fixed order average, minimum, product, maximum, so a felt asking for the
+   * minimum beats a die that never asked for anything and this is the only
+   * place the rule has to be stated.
    * @param simulation - The world to add the collider to
    * @returns The felt, kept so its own events can be told from a die's
    */
@@ -241,6 +251,7 @@ export class PhysicsWorld {
       .setTranslation(0, -FELT_DEPTH / 2, 0)
       .setFriction(FELT_FRICTION)
       .setRestitution(FELT_RESTITUTION)
+      .setRestitutionCombineRule(CoefficientCombineRule.Min)
       .setActiveEvents(ActiveEvents.COLLISION_EVENTS)
 
     return simulation.createCollider(descriptor)

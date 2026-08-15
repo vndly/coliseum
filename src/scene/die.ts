@@ -53,11 +53,10 @@ export class Die {
     this.collider = world.createCollider(
       ColliderDesc.roundCuboid(halfExtent, halfExtent, halfExtent, DIE_CORNER_RADIUS)
 
-        // Stated rather than left to the shape and a density, which is the
-        // whole point: the inertia is deliberately lighter than the solid cube
-        // this is drawn as, so that a hit tumbles the die instead of sliding
-        // it. Rapier would otherwise compute the truthful figure and the cheat
-        // would have nowhere to live.
+        // Stated rather than left to the shape and a density. Both figures are
+        // a solid cube's, so Rapier would arrive at the same place on its own;
+        // saying them out loud is what keeps the mass and the inertia in one
+        // file with everything else the throw is tuned by.
         .setMassProperties(
           DIE_MASS,
           new Vector3(0, 0, 0), // Centre of mass, at the die's own centre
