@@ -1,0 +1,39 @@
+/* Global tokens and reset. */
+
+/* ============================================
+   Tokens
+   ============================================ */
+
+:root {
+    --bg: #ffffff;
+    --fg: #000000;
+}
+
+/* ============================================
+   Reset
+   ============================================ */
+
+/* Universal box-sizing reset */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+/* Base document styles */
+html,
+body,
+#app {
+    height: 100%;
+}
+
+body {
+    background: var(--bg);
+    color: var(--fg);
+}
+
+/* Never the browser default blue */
+:focus-visible {
+    outline: 2px solid var(--fg);
+    outline-offset: 0;
+}
