@@ -283,7 +283,7 @@ export const SETTLE_TIMEOUT = 10 // Seconds
  * is the rule made visible: the sixes are gone before anything is paired, which
  * is why two sixes in the bowl are not a pair.
  */
-export const RESOLUTION_BEAT = 2 // Seconds
+export const RESOLUTION_BEAT = 1.5 // Seconds
 
 // ============================================
 // Physics

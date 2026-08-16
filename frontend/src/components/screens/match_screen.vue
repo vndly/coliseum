@@ -7,7 +7,7 @@
      the render loop. -->
 <script setup lang="ts">
 import {computed, onBeforeUnmount, onMounted, ref, shallowRef, useTemplateRef, watch} from 'vue'
-import {useRoute, useRouter} from 'vue-router'
+import {onBeforeRouteLeave, useRoute, useRouter} from 'vue-router'
 import DieFace from '@/components/die_face.vue'
 import {MatchClient} from '@/match/match_client'
 import type {MatchPlayer, MatchState, ThrowRecord} from '@/match/match_state'
@@ -46,12 +46,15 @@ let awaitingSeq = 0 // Somebody else's throw that has stopped and not yet been j
 let takeoverTimer = 0 // The pending offer to judge it for them, so it can be called off
 let appliedBowlVersion = -1 // The last bowl handed to the scene; -1 so the opening one lands
 let copiedTimer = 0 // The pending reset of the copy button, so it can be called off
+let leaveAllowed = false // Set by every departure made here, so the guard lets those through
 
 const state = shallowRef<MatchState | null>(null)
 const uid = ref('')
 const busy = ref(false) // A throw made here is still in the air
 const resolving = ref(false) // A verdict is being played out, here and on every other table
 const acknowledgedLoss = ref(false) // Whether this player has closed the notice that they are out
+const acknowledgedEnd = ref(false) // Whether this player has closed the notice naming the winner
+const showLeave = ref(false) // Whether the question about leaving the match is up
 const copyResult = ref<'none' | 'done' | 'failed'>('none') // What the last press of copy came to
 const error = ref('')
 
@@ -127,8 +130,23 @@ const canPass = computed<boolean>(
     && state.value?.hasThrown === true,
 )
 
+// The question about leaving takes the screen on its own — it is the only thing
+// being asked, and either answer puts it away again — so both cards it could
+// otherwise stand over give way to it
 const showLoss = computed<boolean>(
-  () => eliminated.value && !finished.value && !acknowledgedLoss.value,
+  () => !showLeave.value && eliminated.value && !finished.value && !acknowledgedLoss.value,
+)
+
+/**
+ * Whether the card naming the winner is up.
+ *
+ * Held back until the scene has finished playing the verdict out. The write
+ * that ends a match is the same one the washes are read from, so a card shown
+ * the moment it lands stands over the very throw it is reporting — and in a
+ * match of two, that throw is the one the loser most wants to look at.
+ */
+const showEnd = computed<boolean>(
+  () => !showLeave.value && finished.value && !acknowledgedEnd.value && !resolving.value,
 )
 
 const winnerLine = computed<string>(() => {
@@ -229,6 +247,8 @@ function onState(next: MatchState, confirmed: boolean): void {
   // the match from before their seat was written — turning them away from the
   // match they had in fact just joined.
   if (confirmed && !next.players.some((player) => player.uid === uid.value)) {
+    leaveAllowed = true
+
     void router.replace({
       name: 'home',
       query: {
@@ -409,7 +429,25 @@ function onKeepWatching(): void {
   acknowledgedLoss.value = true
 }
 
+function onStay(): void {
+  acknowledgedEnd.value = true
+}
+
+function onCancelLeave(): void {
+  showLeave.value = false
+}
+
+/**
+ * Goes back to the lobby, and tells the guard this one was asked for.
+ *
+ * The only way out of the match that is not the back button, and the only one
+ * the guard below does not stop — every press that reaches here has already
+ * been answered by whoever pressed it.
+ */
 function onLeave(): void {
+  leaveAllowed = true
+  showLeave.value = false
+
   void router.push({
     name: 'home',
   })
@@ -447,6 +485,25 @@ async function connect(): Promise<void> {
     error.value = describe(reason)
   }
 }
+
+/**
+ * Answers the back button with a question rather than with the lobby.
+ *
+ * A match is left by leaving its address, and the back button is the one way to
+ * do that without meaning to — a phone's own edge gesture, a press aimed at the
+ * page before this one. The seat survives it, so this is a question and not a
+ * warning, but it is asked. A finished match has nothing left to walk out of.
+ * @returns Whether the navigation may go ahead
+ */
+onBeforeRouteLeave((): boolean => {
+  if (leaveAllowed || finished.value) {
+    return true
+  }
+
+  showLeave.value = true
+
+  return false
+})
 
 onMounted(() => {
   const element = canvas.value
@@ -489,8 +546,12 @@ onBeforeUnmount(() => {
     />
 
     <!-- Mounted from the first frame and merely covered while the seats fill,
-         so the wait for the last player is also the wait for the physics -->
-    <div v-if="inLobby" class="waiting">
+         so the wait for the last player is also the wait for the physics.
+
+         Hidden rather than dropped while the question about leaving is up: it
+         is the wait that decides which chrome exists, and the two scrims over
+         one another only muddy the card that is being answered. -->
+    <div v-if="inLobby" v-show="!showLeave" class="waiting">
       <div class="waiting__card">
         <p class="label">Match code</p>
 
@@ -575,6 +636,17 @@ onBeforeUnmount(() => {
         >
           Pass
         </button>
+
+        <!-- The way out, once the card that was holding it has been put away.
+             Nothing else on a finished table leads anywhere. -->
+        <button
+          v-if="finished && acknowledgedEnd"
+          type="button"
+          class="action"
+          @click="onLeave"
+        >
+          Back to lobby
+        </button>
       </footer>
     </div>
 
@@ -592,14 +664,39 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div v-if="finished" class="notice">
+    <div v-if="showEnd" class="notice">
       <div class="notice__card" role="dialog" aria-labelledby="winner-heading">
         <p class="label">Match over</p>
         <p id="winner-heading" class="notice__winner">{{ winnerLine }}</p>
 
-        <button type="button" class="action" @click="onLeave">
-          Back to lobby
-        </button>
+        <div class="notice__answers">
+          <button type="button" class="action" @click="onLeave">
+            Back to lobby
+          </button>
+
+          <!-- The bowl the match was decided in is still on the table behind
+               this, and a player who has just lost one is owed a look at it -->
+          <button type="button" class="action action--quiet" @click="onStay">
+            Stay
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showLeave" class="notice">
+      <div class="notice__card" role="dialog" aria-labelledby="leave-heading">
+        <p id="leave-heading" class="label">Leave the match</p>
+        <p class="notice__line">Your seat and your dice are kept. The code brings you back.</p>
+
+        <div class="notice__answers">
+          <button type="button" class="action" @click="onCancelLeave">
+            Stay
+          </button>
+
+          <button type="button" class="action action--quiet" @click="onLeave">
+            Leave
+          </button>
+        </div>
       </div>
     </div>
 
@@ -895,6 +992,21 @@ onBeforeUnmount(() => {
     filter: brightness(1.12);
 }
 
+/* The second answer to a question the card has already put one answer to. Sunk
+   into the panel rather than raised off it — the same well the lobby cuts its
+   fields into — so the pair reads as one control and its alternative rather
+   than as two presses of equal weight. Rimmed by an inset shadow rather than a
+   border, which would make it a pixel taller than the button above it. */
+.action--quiet {
+    background: var(--well);
+    color: var(--bone-dim);
+    box-shadow: inset 0 0 0 1px var(--brass-edge);
+}
+
+.action--quiet:hover {
+    color: var(--bone);
+}
+
 /* ============================================
    Out, and over
    ============================================ */
@@ -941,6 +1053,15 @@ onBeforeUnmount(() => {
     font-weight: 600;
     line-height: 1.1;
     color: var(--brass);
+}
+
+/* Stacked rather than set side by side. The card is twenty rem at its widest
+   and these are pills with a pill's padding, so a row would either break the
+   longer word across two lines or push the pair past the card. */
+.notice__answers {
+    display: flex;
+    flex-direction: column;
+    gap: 0.625rem;
 }
 
 .error {
