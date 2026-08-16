@@ -254,7 +254,6 @@ function onPaste(): void {
             :maxlength="NAME_LIMIT"
             :disabled="busy"
             autocomplete="nickname"
-            placeholder="Ana"
           >
         </label>
 
