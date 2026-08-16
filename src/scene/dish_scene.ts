@@ -16,7 +16,7 @@ import {OrbitControls} from 'three/addons/controls/OrbitControls.js'
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js'
 import {AimPreview} from '@/scene/aim_preview'
 import {Dice} from '@/scene/dice'
-import type {DieSnapshot, ThrowLaunch} from '@/scene/die_state'
+import type {DieSnapshot, ThrowLaunch, ThrowResolution, ThrownDie} from '@/scene/die_state'
 import {Dish} from '@/scene/dish'
 import {PhysicsWorld} from '@/scene/physics_world'
 import {Table} from '@/scene/table'
@@ -47,6 +47,7 @@ import {BACKGROUND_COLOR,
   KEY_LIGHT_SHADOW_NEAR,
   KEY_LIGHT_SHADOW_NORMAL_BIAS,
   MAX_FRAME_TIME,
+  RESOLUTION_BEAT,
   SETTLE_MINIMUM,
   SETTLE_TIMEOUT} from '@/scene/dimensions'
 
@@ -88,6 +89,10 @@ export class DishScene {
   private throwing: number | null = null // Seconds since a throw began here, null between throws
   private pending: DieSnapshot[] | null = null // A bowl from the match, waiting for this one to stop
   private pendingElapsed = 0
+  private resolution: ThrowResolution | null = null // A verdict waiting to be played, or playing
+  private resolutionStage: 'waiting' | 'removing' | 'returning' = 'waiting'
+  private resolutionElapsed = 0
+  private announceResolved = false // Whether the bowl still to be applied ends a verdict
 
   /**
    * Called when a gesture on this canvas finishes as a throw.
@@ -97,13 +102,20 @@ export class DishScene {
    * else's — which is what keeps one path through this class for every throw in
    * the match, whoever made it.
    */
-  onLaunch: ((launch: ThrowLaunch) => void) | null = null
+  onLaunch: ((launches: ThrowLaunch[]) => void) | null = null
 
   /**
    * Called once when the bowl comes to rest after a throw, or when it has been
    * given long enough and is declared at rest regardless.
    */
   onSettled: (() => void) | null = null
+
+  /**
+   * Called once a verdict has finished playing and the bowl it leaves behind is
+   * on the table. Until then the next player is looking at dice that are still
+   * being taken away, and must not be able to throw into them.
+   */
+  onResolved: (() => void) | null = null
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new WebGLRenderer({
@@ -188,6 +200,15 @@ export class DishScene {
     this.throwController.throwEnabled = enabled
   }
 
+  /**
+   * How many dice the next gesture on this canvas puts in the air. One on an
+   * ordinary turn, and the player's whole hand on a turn that begins with an
+   * empty bowl.
+   */
+  set throwCount(count: number) {
+    this.throwController.throwCount = count
+  }
+
   /** How many dice are in the bowl, which is what DIE_LIMIT is measured against. */
   get dieCount(): number {
     return this.dice.count
@@ -199,17 +220,58 @@ export class DishScene {
   }
 
   /**
+   * Whether there is a simulation behind the bowl at all.
+   *
+   * A scene whose physics never started holds no dice and reports an empty
+   * bowl, which is indistinguishable from a bowl that has genuinely been
+   * emptied. Anyone about to publish this player's bowl as the match's own has
+   * to tell those two apart first.
+   */
+  get isSimulating(): boolean {
+    return this.physics.world !== null
+  }
+
+  /**
    * Makes a throw, whoever made it.
    *
    * The local player's own throw comes through here too, and immediately
    * rather than after the round trip: the hand that threw it should not be
    * waiting on a database to see it leave.
-   * @param identifier - The name every player knows this die by
-   * @param launch - The throw, as its thrower described it
+   * @param dice - Every die of the throw, as its thrower described them
    */
-  applyThrow(identifier: string, launch: ThrowLaunch): void {
-    this.dice.throw(this.physics, identifier, launch)
+  applyThrow(dice: ThrownDie[]): void {
+    if (dice.length === 0) {
+      return
+    }
+
+    for (const die of dice) {
+      this.dice.throw(this.physics, die.id, die.launch)
+    }
+
     this.throwing = 0
+  }
+
+  /**
+   * Takes a settled throw's verdict and plays it out.
+   *
+   * The bowl is set to where the dice actually stopped first, so that every
+   * player is looking at the same faces before any of them is called a six; the
+   * two washes are then held in turn, and the bowl the match holds is applied
+   * once the dice they took have finished leaving.
+   *
+   * Deferred on arrival for the same reason a bowl is: the thrower's simulation
+   * finished first, which is why theirs is the one that counts, and it usually
+   * lands here while these dice are still in the air.
+   * @param resolution - What the throw came to, and in what order to show it
+   * @param bowl - The bowl the match holds once the verdict has been played
+   */
+  applyVerdict(resolution: ThrowResolution, bowl: DieSnapshot[]): void {
+    this.resolution = resolution
+    this.resolutionStage = 'waiting'
+    this.resolutionElapsed = 0
+    this.announceResolved = true
+    this.pending = bowl
+    this.pendingElapsed = 0
   }
 
   /**
@@ -283,13 +345,14 @@ export class DishScene {
    * Hands a finished gesture upwards. Bound as a field so it can be given to
    * the throw controller without losing its receiver.
    */
-  private readonly emitLaunch = (launch: ThrowLaunch): void => {
-    this.onLaunch?.(launch)
+  private readonly emitLaunch = (launches: ThrowLaunch[]): void => {
+    this.onLaunch?.(launches)
   }
 
   /**
-   * Advances the two things the match waits on: a throw made here coming to
-   * rest, and a bowl from the match waiting for somewhere still to land in.
+   * Advances the three things the match waits on: a throw made here coming to
+   * rest, a verdict being played out over it, and a bowl from the match waiting
+   * for somewhere still to land in.
    * @param deltaTime - Seconds elapsed since the previous frame
    */
   private advanceMatch(deltaTime: number): void {
@@ -307,10 +370,23 @@ export class DishScene {
       }
     }
 
-    // Rapier is still loading. The bowl is held rather than dropped: the first
-    // one a player is given is the match's opening state, and arriving before
-    // the world does is the normal case rather than the unlucky one.
-    if (this.pending === null || this.physics.world === null) {
+    // Rapier is still loading. Everything waiting is held rather than dropped:
+    // the first bowl a player is given is the match's opening state, and
+    // arriving before the world does is the normal case rather than the
+    // unlucky one.
+    if (this.physics.world === null) {
+      return
+    }
+
+    // The bowl a verdict ends at is the one waiting behind it, so it is held
+    // until the verdict has finished with the dice it is about to take
+    if (this.resolution !== null) {
+      this.advanceResolution(deltaTime)
+
+      return
+    }
+
+    if (this.pending === null) {
       return
     }
 
@@ -325,6 +401,85 @@ export class DishScene {
     // Taken off before it is applied, so a bowl cannot be applied twice
     this.pending = null
     this.dice.restore(this.physics, bowl)
+
+    if (this.announceResolved) {
+      this.announceResolved = false
+      this.onResolved?.()
+    }
+  }
+
+  /**
+   * Plays the verdict a frame at a time: the landing, then the sixes, then the
+   * group.
+   *
+   * Paced on the render clock rather than on timers, so the washes are held for
+   * as much time as the scene itself advanced through. A backgrounded tab hands
+   * back one enormous frame, and a verdict measured in wall clock would be over
+   * before the player looking at it had seen a single frame of it.
+   * @param deltaTime - Seconds elapsed since the previous frame
+   */
+  private advanceResolution(deltaTime: number): void {
+    const resolution = this.resolution
+
+    if (resolution === null) {
+      return
+    }
+
+    this.resolutionElapsed += deltaTime
+
+    // The dice here are still in the air, or still spilling off the rim. What
+    // the verdict has to show happens to the bowl the thrower saw, so it waits
+    // for this one to be finished with.
+    if (this.resolutionStage === 'waiting') {
+      if (!this.dice.isSettled && this.resolutionElapsed < SETTLE_TIMEOUT) {
+        return
+      }
+
+      this.dice.restore(this.physics, resolution.atRest)
+      this.beginBeat('removing', resolution.removed)
+
+      return
+    }
+
+    if (this.resolutionElapsed < RESOLUTION_BEAT) {
+      return
+    }
+
+    if (this.resolutionStage === 'removing') {
+      this.dice.dismiss(resolution.removed)
+      this.beginBeat('returning', resolution.returned)
+
+      return
+    }
+
+    this.dice.dismiss(resolution.returned)
+    this.resolution = null
+  }
+
+  /**
+   * Starts the next wash, or skips straight past it when it has nothing to
+   * show. A throw where nobody rolled a six and nothing paired costs no time at
+   * all, which is most of them.
+   * @param stage - The wash to begin
+   * @param identifiers - The dice it would be shown on
+   */
+  private beginBeat(stage: 'removing' | 'returning', identifiers: string[]): void {
+    this.resolutionElapsed = 0
+    this.resolutionStage = stage
+
+    if (identifiers.length === 0) {
+      // Nothing to hold on, so the beat is over before it began. The next frame
+      // moves on to whatever comes after it.
+      this.resolutionElapsed = RESOLUTION_BEAT
+
+      return
+    }
+
+    if (stage === 'removing') {
+      this.dice.markRemoved(identifiers)
+    } else {
+      this.dice.markReturned(identifiers)
+    }
   }
 
   /**

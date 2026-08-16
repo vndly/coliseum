@@ -1,7 +1,8 @@
 import {ColliderDesc, RigidBodyDesc} from '@dimforge/rapier3d-compat'
 import type {ColliderHandle, RigidBody, World} from '@dimforge/rapier3d-compat'
 import {Quaternion, Vector3} from 'three'
-import type {Object3D} from 'three'
+import type {Material, Mesh, Object3D} from 'three'
+import {readDieFace} from '@/scene/die_state'
 import type {DieSnapshot, ThrowLaunch} from '@/scene/die_state'
 import {DIE_ANGULAR_DAMPING,
   DIE_CORNER_RADIUS,
@@ -37,6 +38,7 @@ const AT_REST = new Vector3(0, 0, 0) // Shared, and only ever read
 export class Die {
   private readonly identifier: string // Agreed with every other player
   private readonly meshes: Object3D // The visual half, positioned from the body
+  private readonly shell: Mesh // The body within it, which is what carries the die's colour
   private readonly body: RigidBody
   private readonly collider: ColliderHandle // Cached, so it survives the body's removal
   private outOfPlay = false // Set once the die has reached the table
@@ -45,6 +47,7 @@ export class Die {
   private constructor(
     world: World,
     meshes: Object3D,
+    shell: Mesh,
     identifier: string,
     position: Vector3,
     rotation: Quaternion,
@@ -53,6 +56,7 @@ export class Die {
   ) {
     this.identifier = identifier
     this.meshes = meshes
+    this.shell = shell
 
     this.body = world.createRigidBody(RigidBodyDesc.dynamic()
       .setTranslation(position.x, position.y, position.z)
@@ -93,14 +97,22 @@ export class Die {
    * Builds a die from a throw, wherever that throw was made.
    * @param world - The world the body is created in
    * @param meshes - The visual half, already built
+   * @param shell - The body among those meshes, which the wash is put on
    * @param identifier - The name both players know this die by
    * @param launch - The throw, exactly as the thrower described it
    * @returns The die, already moving
    */
-  static thrown(world: World, meshes: Object3D, identifier: string, launch: ThrowLaunch): Die {
+  static thrown(
+    world: World,
+    meshes: Object3D,
+    shell: Mesh,
+    identifier: string,
+    launch: ThrowLaunch,
+  ): Die {
     return new Die(
       world,
       meshes,
+      shell,
       identifier,
       new Vector3(...launch.origin),
       new Quaternion(...launch.orientation),
@@ -115,13 +127,15 @@ export class Die {
    * reload, and for a die this player never saw thrown.
    * @param world - The world the body is created in
    * @param meshes - The visual half, already built
+   * @param shell - The body among those meshes, which the wash is put on
    * @param snapshot - Where the die sits and how it is turned
    * @returns The die, at rest
    */
-  static resting(world: World, meshes: Object3D, snapshot: DieSnapshot): Die {
+  static resting(world: World, meshes: Object3D, shell: Mesh, snapshot: DieSnapshot): Die {
     return new Die(
       world,
       meshes,
+      shell,
       snapshot.id,
       new Vector3(...snapshot.position),
       new Quaternion(...snapshot.rotation),
@@ -169,10 +183,25 @@ export class Die {
     return this.body.isSleeping()
   }
 
-  /** Where the die sits and how it is turned, ready to be written to the match. */
+  /**
+   * Where the die sits, how it is turned, and what it is showing, ready to be
+   * written to the match.
+   *
+   * The face is read here every time rather than remembered from the last time
+   * it was asked for. The value and the attitude are then two answers to the
+   * same question taken in the same instant, and there is no state left over
+   * for a teleport to turn the die out from under.
+   */
   get snapshot(): DieSnapshot {
     const translation = this.body.translation()
     const rotation = this.body.rotation()
+
+    const attitude: [number, number, number, number] = [
+      rotation.x,
+      rotation.y,
+      rotation.z,
+      rotation.w,
+    ]
 
     return {
       id: this.identifier,
@@ -181,13 +210,18 @@ export class Die {
         translation.y,
         translation.z,
       ],
-      rotation: [
-        rotation.x,
-        rotation.y,
-        rotation.z,
-        rotation.w,
-      ],
+      rotation: attitude,
+      face: readDieFace(attitude),
     }
+  }
+
+  /**
+   * Paints the die's body, and only its body: the pips keep their own material
+   * so that a washed die is still one whose value can be counted.
+   * @param material - What the body is to be drawn with
+   */
+  applyMaterial(material: Material): void {
+    this.shell.material = material
   }
 
   /**

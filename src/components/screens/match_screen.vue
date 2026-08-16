@@ -11,6 +11,7 @@ import {useRoute, useRouter} from 'vue-router'
 import DieFace from '@/components/die_face.vue'
 import {MatchClient} from '@/match/match_client'
 import type {MatchPlayer, MatchState, ThrowRecord} from '@/match/match_state'
+import {isAllIn, nextActivePlayer, poolSize, throwSize} from '@/match/rules'
 import type {ThrowLaunch} from '@/scene/die_state'
 import {DIE_LIMIT} from '@/scene/dimensions'
 import {DishScene} from '@/scene/dish_scene'
@@ -25,18 +26,32 @@ const canvas = useTemplateRef<HTMLCanvasElement>('canvas')
 
 const COPIED_MILLISECONDS = 2000 // How long the copy button holds its answer
 
+/**
+ * How long a settled bowl is left unjudged before somebody else judges it.
+ *
+ * The thrower publishes what their throw came to as soon as their own dice
+ * stop, so this only ever runs out when they have closed the tab between the
+ * two. Long enough that an ordinary round trip is never mistaken for one.
+ */
+const TAKEOVER_MILLISECONDS = 5000
+
 // None of these are refs: the scene mutates every frame and must stay out of
-// reactivity, and the client and the two counters are only ever read from
-// callbacks that already know when they changed
+// reactivity, and the client and the counters are only ever read from callbacks
+// that already know when they changed
 let scene: DishScene | null = null
 let client: MatchClient | null = null
 let pendingSeq = 0 // The throw made here that is waiting to come to rest
+let pendingThrow: Promise<void> = Promise.resolve() // That throw's own write, still in flight
+let awaitingSeq = 0 // Somebody else's throw that has stopped and not yet been judged
+let takeoverTimer = 0 // The pending offer to judge it for them, so it can be called off
 let appliedBowlVersion = -1 // The last bowl handed to the scene; -1 so the opening one lands
 let copiedTimer = 0 // The pending reset of the copy button, so it can be called off
 
 const state = shallowRef<MatchState | null>(null)
 const uid = ref('')
 const busy = ref(false) // A throw made here is still in the air
+const resolving = ref(false) // A verdict is being played out, here and on every other table
+const acknowledgedLoss = ref(false) // Whether this player has closed the notice that they are out
 const copyResult = ref<'none' | 'done' | 'failed'>('none') // What the last press of copy came to
 const error = ref('')
 
@@ -46,17 +61,104 @@ const activePlayer = computed<MatchPlayer | null>(() => {
   return match === null ? null : match.players[match.turnIndex] ?? null
 })
 
+// Seats, then play, then a winner. The wait is shown for the first of the three
+// and the chrome for the other two, so a finished match is still a match.
+const inLobby = computed<boolean>(() => state.value === null || state.value.phase === 'lobby')
 const playing = computed<boolean>(() => state.value?.phase === 'playing')
+const finished = computed<boolean>(() => state.value?.phase === 'finished')
+
 const isMyTurn = computed<boolean>(() => uid.value !== '' && activePlayer.value?.uid === uid.value)
 const bowlFull = computed<boolean>(() => (state.value?.bowl.length ?? 0) >= DIE_LIMIT)
 
+const myPool = computed<number>(() => {
+  const match = state.value
+
+  return match === null || uid.value === '' ? 0 : poolSize(match, uid.value)
+})
+
+/**
+ * Whether the last throw has been judged.
+ *
+ * A hand is charged the moment its dice leave it and paid back only when the
+ * throw is judged, so between those two writes a player can be holding nothing
+ * without being out — and because the charge is on the match document, every
+ * client reads that gap, not just the one that threw. Everything that would
+ * otherwise mistake it for elimination, or let a second throw into it, waits on
+ * this rather than on a flag only the thrower's own machine has.
+ */
+const judged = computed<boolean>(() => {
+  const match = state.value
+
+  return match === null || (match.verdict?.seq ?? 0) === match.throwSeq
+})
+
+const eliminated = computed<boolean>(
+  () => !inLobby.value && uid.value !== '' && judged.value && myPool.value <= 0,
+)
+
+const allIn = computed<boolean>(() => state.value !== null && isAllIn(state.value))
+
+/** How many dice the next gesture on the canvas is to put in the air. */
+const handToThrow = computed<number>(() => {
+  const match = state.value
+
+  return match === null || uid.value === '' ? 1 : throwSize(match, uid.value)
+})
+
+// Both close over the whole of a throw, not just its flight. The dice stopping
+// is not the end of it: the verdict is still being written, and a gesture or a
+// pass landing in that gap would be judged against a bowl the match has not
+// finished with — or would move the turn out from under the verdict on its way
+// to the thrower's own hand.
 const canThrow = computed<boolean>(
-  () => playing.value && isMyTurn.value && !busy.value && !bowlFull.value,
+  () => playing.value
+    && isMyTurn.value
+    && !busy.value
+    && !resolving.value
+    && judged.value
+    && !bowlFull.value
+    && myPool.value > 0,
 )
 
 const canPass = computed<boolean>(
-  () => playing.value && isMyTurn.value && !busy.value && state.value?.hasThrown === true,
+  () => playing.value
+    && isMyTurn.value
+    && !busy.value
+    && !resolving.value
+    && judged.value
+    && state.value?.hasThrown === true,
 )
+
+const showLoss = computed<boolean>(
+  () => eliminated.value && !finished.value && !acknowledgedLoss.value,
+)
+
+const winnerLine = computed<string>(() => {
+  const match = state.value
+
+  if (match === null || match.winner === null) {
+    return ''
+  }
+
+  if (match.winner === uid.value) {
+    return 'You win'
+  }
+
+  return `${match.players.find((player) => player.uid === match.winner)?.name ?? 'Someone'} wins`
+})
+
+const winnerHand = computed<string>(() => {
+  const match = state.value
+  const winner = match?.winner ?? null
+
+  if (match === null || winner === null) {
+    return ''
+  }
+
+  const dice = poolSize(match, winner)
+
+  return dice === 1 ? 'One die left standing' : `${dice} dice left standing`
+})
 
 const seatsTaken = computed<number>(() => state.value?.players.length ?? 0)
 const seatsTotal = computed<number>(() => state.value?.playerCount ?? 0)
@@ -82,8 +184,23 @@ const status = computed<string>(() => {
     return 'Finding the match'
   }
 
+  // The dialog names the winner, and a line under it would only say it again
+  if (finished.value) {
+    return ''
+  }
+
+  if (eliminated.value) {
+    return 'You are out — watching to the end'
+  }
+
   if (busy.value) {
     return 'Rolling'
+  }
+
+  // The washes on the dice are the whole explanation, and a line beside them
+  // would be reading out what the player is already looking at
+  if (resolving.value) {
+    return ''
   }
 
   if (!isMyTurn.value) {
@@ -92,6 +209,16 @@ const status = computed<string>(() => {
 
   if (bowlFull.value) {
     return 'The bowl is full — pass to end your turn'
+  }
+
+  if (allIn.value) {
+    return 'The bowl is empty — throw your whole hand'
+  }
+
+  // Reached only on a turn that threw and paired nothing, since pairing hands
+  // the turn on by itself
+  if (match.hasThrown) {
+    return 'Nothing paired — throw again or pass'
   }
 
   // Nothing to say on a turn that is this player's and still open: the lit seat
@@ -104,6 +231,14 @@ const status = computed<string>(() => {
 watch(canThrow, (enabled) => {
   if (scene !== null) {
     scene.throwEnabled = enabled
+  }
+})
+
+// A turn that begins with an empty bowl throws the whole hand on one gesture,
+// so the canvas has to know how many dice a release is worth before it happens
+watch(handToThrow, (count) => {
+  if (scene !== null) {
+    scene.throwCount = count
   }
 })
 
@@ -174,26 +309,47 @@ function onState(next: MatchState, confirmed: boolean): void {
   // announced and its result being written, the match still holds the bowl
   // from before it — applying that would take the flying die back off the
   // table on every screen watching it.
-  if (next.bowlVersion !== appliedBowlVersion) {
-    appliedBowlVersion = next.bowlVersion
-    scene?.reconcileBowl(next.bowl)
+  if (next.bowlVersion === appliedBowlVersion) {
+    return
   }
+
+  const arriving = appliedBowlVersion === -1
+
+  appliedBowlVersion = next.bowlVersion
+
+  // Whatever this bowl was waiting on has happened
+  window.clearTimeout(takeoverTimer)
+
+  // A player who has only just opened the match has no bowl for a verdict to
+  // take dice out of. They are given the one it ended at, and what happened on
+  // the way there is somebody else's memory.
+  if (next.verdict === null || arriving) {
+    scene?.reconcileBowl(next.bowl)
+
+    return
+  }
+
+  resolving.value = true
+  scene?.applyVerdict(next.verdict, next.bowl)
 }
 
 /**
  * Plays somebody else's throw, so that a player who is not throwing still
- * watches a die fly rather than watching one appear.
+ * watches the dice fly rather than watching them appear.
  * @param record - The throw, as its thrower described it
  */
 function onThrow(record: ThrowRecord): void {
-  scene?.applyThrow(record.dieId, record.launch)
+  scene?.applyThrow(record.dice)
 }
 
 /**
  * Sends a throw made on this canvas, and makes it here at once.
- * @param launch - The finished gesture
+ *
+ * The dice are named after the throw and their place in it, so a hand thrown
+ * all at once still gives every die a name every player agrees on.
+ * @param launches - The finished gesture, one launch per die it put in the air
  */
-function onLaunch(launch: ThrowLaunch): void {
+function onLaunch(launches: ThrowLaunch[]): void {
   const match = state.value
   const connected = client
 
@@ -202,36 +358,100 @@ function onLaunch(launch: ThrowLaunch): void {
   }
 
   const seq = match.throwSeq + 1
+  const dice = launches.map((launch, index) => ({
+    id: `${seq}-${index}`,
+    launch: launch,
+  }))
 
   pendingSeq = seq
   busy.value = true
-  scene?.applyThrow(String(seq), launch)
+  scene?.applyThrow(dice)
 
-  connected.submitThrow(seq, launch).catch((reason: unknown) => {
+  const submitted = connected.submitThrow(seq, dice)
+
+  pendingThrow = submitted
+
+  submitted.catch((reason: unknown) => {
     busy.value = false
     error.value = describe(reason)
   })
 }
 
 /**
- * Publishes where the dice stopped.
+ * Judges the bowl once it has stopped.
  *
  * The scene reports this for every throw it runs, including the ones this
- * player only watched, so the first thing it does is check that the throw was
- * this player's to finish.
+ * player only watched, and the two are answered differently: the thrower
+ * judges their own bowl straight away, and everybody else starts a clock in
+ * case they never do.
  */
 function onSettled(): void {
+  const match = state.value
   const connected = client
 
-  if (!busy.value || connected === null) {
+  if (match === null || connected === null) {
     return
   }
 
   const bowl = scene?.bowlSnapshot ?? []
 
-  busy.value = false
+  if (busy.value) {
+    const seq = pendingSeq
 
-  connected.submitResult(pendingSeq, bowl).catch((reason: unknown) => {
+    busy.value = false
+
+    // Chained onto the throw's own write rather than fired beside it. The
+    // verdict is refused by a match that has not heard of the throw yet, and
+    // over a slow connection the dice can stop before that write has landed.
+    pendingThrow
+      .then(() => connected.submitVerdict(seq, bowl))
+      .catch((reason: unknown) => {
+        error.value = describe(reason)
+      })
+
+    return
+  }
+
+  awaitingSeq = match.throwSeq
+
+  window.clearTimeout(takeoverTimer)
+  takeoverTimer = window.setTimeout(runTakeover, TAKEOVER_MILLISECONDS)
+}
+
+/**
+ * Judges a bowl the player who threw it never got around to judging.
+ *
+ * Only the player who would throw next offers, so that five tables do not all
+ * reach for the same bowl at once — and the write refuses itself anyway if the
+ * thrower turns out to have managed it after all.
+ */
+function runTakeover(): void {
+  const match = state.value
+  const connected = client
+
+  if (match === null || connected === null || match.phase !== 'playing') {
+    return
+  }
+
+  // Nothing here is worth publishing. A scene whose physics never started
+  // reports an empty bowl rather than no bowl, and a scene part way through a
+  // verdict is holding the previous throw's dice — either would be written over
+  // the match as though it were what the thrower saw.
+  if (scene === null || !scene.isSimulating || resolving.value) {
+    return
+  }
+
+  if (match.verdict !== null && match.verdict.seq >= awaitingSeq) {
+    return
+  }
+
+  const seat = match.players.findIndex((player) => player.uid === uid.value)
+
+  if (seat === -1 || nextActivePlayer(match.players, match.pools, match.turnIndex) !== seat) {
+    return
+  }
+
+  connected.submitVerdict(awaitingSeq, scene?.bowlSnapshot ?? []).catch((reason: unknown) => {
     error.value = describe(reason)
   })
 }
@@ -247,6 +467,37 @@ function onPass(): void {
   connected.pass(match).catch((reason: unknown) => {
     error.value = describe(reason)
   })
+}
+
+function onKeepWatching(): void {
+  acknowledgedLoss.value = true
+}
+
+function onLeave(): void {
+  void router.push({
+    name: 'home',
+  })
+}
+
+/**
+ * How many dice a player is holding, for the rail.
+ * @param player - The seat to count
+ * @returns Their hand, which is zero once they are out
+ */
+function handOf(player: MatchPlayer): number {
+  const match = state.value
+
+  return match === null ? 0 : poolSize(match, player.uid)
+}
+
+/**
+ * Whether a player is out of the match, rather than merely empty-handed for as
+ * long as their own dice are in the air.
+ * @param player - The seat to test
+ * @returns Whether their hand is empty and the throw that emptied it has been judged
+ */
+function isOut(player: MatchPlayer): boolean {
+  return judged.value && handOf(player) <= 0
 }
 
 async function connect(): Promise<void> {
@@ -271,6 +522,9 @@ onMounted(() => {
   scene = new DishScene(element)
   scene.onLaunch = onLaunch
   scene.onSettled = onSettled
+  scene.onResolved = () => {
+    resolving.value = false
+  }
   scene.start()
 
   // Deliberately not awaited. The bowl paints on the first frame either way,
@@ -280,6 +534,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.clearTimeout(copiedTimer)
+  window.clearTimeout(takeoverTimer)
   client?.dispose()
   client = null
   scene?.dispose()
@@ -299,7 +554,7 @@ onBeforeUnmount(() => {
 
     <!-- Mounted from the first frame and merely covered while the seats fill,
          so the wait for the last player is also the wait for the physics -->
-    <div v-if="!playing" class="waiting">
+    <div v-if="inLobby" class="waiting">
       <div class="waiting__card">
         <p class="label">Match code</p>
 
@@ -347,10 +602,27 @@ onBeforeUnmount(() => {
             v-for="(player, seat) in state?.players ?? []"
             :key="player.uid"
             class="rail__player"
-            :class="{'rail__player--active': player.uid === activePlayer?.uid}"
+            :class="{
+              'rail__player--active': !finished && player.uid === activePlayer?.uid,
+              'rail__player--out': isOut(player),
+            }"
           >
-            <DieFace :value="seat + 1" :lit="player.uid === activePlayer?.uid" />
+            <DieFace
+              :value="seat + 1"
+              :lit="!finished && player.uid === activePlayer?.uid"
+            />
             <span class="rail__name">{{ player.name }}</span>
+
+            <!-- A player out of the match is named rather than counted, because
+                 a nought is a real and temporary reading: a hand is charged as
+                 its dice leave, so anyone mid-throw is holding none of them.
+                 Counted until the throw is judged, named once it is. -->
+            <span v-if="isOut(player)" class="rail__gone">Out</span>
+
+            <!-- Keyed on the count so the element is rebuilt whenever it changes,
+                 which is what replays the flare. Dice leaving a hand and coming
+                 back to it is the whole game, and it happens off screen. -->
+            <span v-else :key="handOf(player)" class="rail__hand">{{ handOf(player) }}</span>
           </li>
         </ul>
       </header>
@@ -369,6 +641,32 @@ onBeforeUnmount(() => {
           Pass
         </button>
       </footer>
+    </div>
+
+    <!-- Both notices leave the bowl visible behind them. One says to keep
+         watching and the other is shown over the bowl everybody wants to see,
+         so neither can be the blackout the lobby uses. -->
+    <div v-if="showLoss" class="notice">
+      <div class="notice__card" role="dialog" aria-labelledby="loss-heading">
+        <p id="loss-heading" class="label">Out of the match</p>
+        <p class="notice__line">You have no dice left. Stay and see who takes it.</p>
+
+        <button type="button" class="action" @click="onKeepWatching">
+          Keep watching
+        </button>
+      </div>
+    </div>
+
+    <div v-if="finished" class="notice">
+      <div class="notice__card" role="dialog" aria-labelledby="winner-heading">
+        <p class="label">Match over</p>
+        <p id="winner-heading" class="notice__winner">{{ winnerLine }}</p>
+        <p class="notice__hand">{{ winnerHand }}</p>
+
+        <button type="button" class="action" @click="onLeave">
+          Back to lobby
+        </button>
+      </div>
     </div>
 
     <p v-if="error" class="error" role="alert">{{ error }}</p>
@@ -585,6 +883,60 @@ onBeforeUnmount(() => {
     color: var(--bone);
 }
 
+/* The hand is the one number on screen worth reading, so it is set in the face
+   the match code is set in — this interface's voice for a value rather than a
+   word. Tabular, because six of these are rewritten every few seconds and a
+   rail that reflowed each time would be unreadable while it mattered most. */
+.rail__hand {
+    min-width: 1ch;
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    color: var(--brass);
+
+    /* Rebuilt whenever the count changes, so this plays on exactly the throws
+       that paid somebody and on none of the others */
+    animation: hand-changed 520ms ease-out;
+}
+
+/* Dice moving between the bowl and a hand is the whole of the game, and the
+   only part of it that happens away from the table */
+@keyframes hand-changed {
+    from {
+        color: var(--bone);
+        text-shadow: 0 0 0.85rem var(--brass);
+    }
+
+    to {
+        color: var(--brass);
+        text-shadow: none;
+    }
+}
+
+.rail__gone {
+    font: var(--plate);
+    letter-spacing: var(--plate-tracking);
+    text-transform: uppercase;
+    color: var(--bone-faint);
+}
+
+/* Kept on the rail rather than taken off it. Who is left is a fact about the
+   match, and a pill that quietly disappeared would take the answer with it. */
+.rail__player--out {
+    background: rgb(14 18 16 / 35%);
+}
+
+.rail__player--out .rail__name {
+    color: var(--bone-faint);
+    text-decoration: line-through;
+}
+
+.rail__player--out .die-face {
+    opacity: 0.45;
+}
+
 .chrome__bottom {
     display: flex;
     align-items: center;
@@ -616,6 +968,61 @@ onBeforeUnmount(() => {
 
 .action:hover {
     filter: brightness(1.12);
+}
+
+/* ============================================
+   Out, and over
+   ============================================ */
+
+/* The same raised surface the lobby uses, over a far lighter scrim. One of
+   these tells the player to keep watching and the other stands over the bowl
+   the whole match was played for; blacking either of them out would argue with
+   what the card says. */
+.notice {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.25rem;
+    background: rgb(14 18 16 / 62%);
+}
+
+.notice__card {
+    width: 100%;
+    max-width: 20rem;
+    padding: 1.75rem;
+    border: 1px solid var(--brass-edge);
+    border-radius: 0.75rem;
+    background: var(--panel);
+    text-align: center;
+    box-shadow:
+        inset 0 1px 0 rgb(200 164 104 / 18%),
+        0 1.5rem 3rem rgb(0 0 0 / 45%);
+}
+
+.notice__line {
+    margin: 0.75rem 0 1.5rem;
+    font-size: 0.9375rem;
+    color: var(--bone-dim);
+}
+
+/* A code is a serial number and is set as one; a name is not. The winner is the
+   only thing on this screen set large in the interface's own face, which is
+   what keeps the two kinds of value from reading as the same thing. */
+.notice__winner {
+    margin-top: 0.75rem;
+    font-size: 2rem;
+    font-weight: 600;
+    line-height: 1.1;
+    color: var(--brass);
+}
+
+.notice__hand {
+    margin: 0.375rem 0 1.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    color: var(--bone-faint);
 }
 
 .error {

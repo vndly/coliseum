@@ -138,6 +138,20 @@ export const DIE_CLEARCOAT = 0.5 // Polished resin, a softer coat than the bowl'
 export const DIE_CLEARCOAT_ROUGHNESS = 0.25
 
 export const DIE_PIP_COLOR = 0x18120e
+
+/**
+ * The two colours a die is washed with while a settled bowl is being judged.
+ *
+ * The bone is replaced outright rather than shaded, because the wash carries
+ * the whole of the explanation: a die gone red is leaving the match, a die gone
+ * green is going back to a hand, and neither is a state the player has anywhere
+ * else to read it from. The red is the same ember the interface answers a
+ * mistake in; the green is the baize lifted far enough to still read as a wash
+ * over bone rather than as a die turned dark.
+ */
+export const DIE_REMOVED_COLOR = 0xe06a52 // Sixes, out of the match
+export const DIE_MATCHED_COLOR = 0x6fbf87 // A group, back to the thrower
+
 export const DIE_PIP_RADIUS = 0.095
 export const DIE_PIP_SEGMENTS = 10 // Around the sphere; only a shallow cap of it is ever seen
 export const DIE_PIP_SPACING = 0.235 // Face centre to a corner pip, along each face axis
@@ -257,6 +271,19 @@ export const SETTLE_MINIMUM = 0.5 // Seconds
  * beats a match that never continues.
  */
 export const SETTLE_TIMEOUT = 10 // Seconds
+
+/**
+ * How long each of the two verdict washes is held.
+ *
+ * Paid on every throw that has anything to show and twice on one that has both,
+ * so it sets the pace of the whole game. Long enough to look over a bowl of six
+ * and find the group in it; short enough that a turn is not mostly waiting.
+ *
+ * The two are held one after the other rather than together, and that ordering
+ * is the rule made visible: the sixes are gone before anything is paired, which
+ * is why two sixes in the bowl are not a pair.
+ */
+export const RESOLUTION_BEAT = 2 // Seconds
 
 // ============================================
 // Physics
@@ -416,6 +443,20 @@ export const THROW_FLIGHT_TIME = 0.16 // Seconds
  * pointer and always in view.
  */
 export const THROW_MAX_RADIUS = 8
+
+/**
+ * How far out from the launch the dice of an all-in throw are spread.
+ *
+ * A whole hand leaves on one gesture, and six bodies created at the same point
+ * are six bodies overlapping — which a solver answers by firing them apart. The
+ * dice are placed around a ring of this radius instead: at six of them that is
+ * a circumference of over seven die widths, so no two start out touching.
+ *
+ * The ring is horizontal, which is what lets one clearance test cover the whole
+ * fan. Every die of it sits at the launch's own height, so a launch lifted
+ * clear of the bowl carries all six over with it.
+ */
+export const THROW_FAN_RADIUS = DIE_SIZE * 1.2
 
 // ============================================
 // Aim preview

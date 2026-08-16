@@ -9,6 +9,7 @@ import type {BufferGeometry, Object3D} from 'three'
 import {RoundedBoxGeometry} from 'three/addons/geometries/RoundedBoxGeometry.js'
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js'
 import {Die} from '@/scene/die'
+import {DIE_FACE_NORMALS} from '@/scene/die_state'
 import type {DieSnapshot, ThrowLaunch} from '@/scene/die_state'
 import type {PhysicsWorld} from '@/scene/physics_world'
 import {DIE_CLEARCOAT,
@@ -17,11 +18,13 @@ import {DIE_CLEARCOAT,
   DIE_CORNER_RADIUS,
   DIE_CORNER_SEGMENTS,
   DIE_LIMIT,
+  DIE_MATCHED_COLOR,
   DIE_PIP_COLOR,
   DIE_PIP_INSET,
   DIE_PIP_RADIUS,
   DIE_PIP_SEGMENTS,
   DIE_PIP_SPACING,
+  DIE_REMOVED_COLOR,
   DIE_ROUGHNESS,
   DIE_SIZE} from '@/scene/dimensions'
 
@@ -43,6 +46,8 @@ export class Dice {
   private readonly pipGeometry: BufferGeometry // All twenty-one pips, merged into one
   private readonly bodyMaterial: MeshPhysicalMaterial
   private readonly pipMaterial: MeshPhysicalMaterial
+  private readonly removedMaterial: MeshPhysicalMaterial // The wash a six leaves in
+  private readonly matchedMaterial: MeshPhysicalMaterial // The wash a group comes back in
   private readonly dice: Die[] = []
   private readonly restoredPosition = new Vector3() // Scratch, to keep reconciling allocation free
   private readonly restoredRotation = new Quaternion()
@@ -75,6 +80,11 @@ export class Dice {
       roughness: DIE_ROUGHNESS,
       metalness: 0,
     })
+
+    // Shared like the other two rather than cloned per die. However many dice
+    // a verdict washes, there are only ever these two colours on the table.
+    this.removedMaterial = this.buildWash(DIE_REMOVED_COLOR)
+    this.matchedMaterial = this.buildWash(DIE_MATCHED_COLOR)
   }
 
   get object(): Object3D {
@@ -134,10 +144,45 @@ export class Dice {
       return
     }
 
-    const die = Die.thrown(world, this.buildMeshes(), identifier, launch)
+    const built = this.buildMeshes()
+    const die = Die.thrown(world, built.group, built.shell, identifier, launch)
 
     this.group.add(die.object)
     this.dice.push(die)
+  }
+
+  /**
+   * Washes the dice that are leaving the match in the colour that says so.
+   * @param identifiers - The dice showing a six
+   */
+  markRemoved(identifiers: string[]): void {
+    this.paint(identifiers, this.removedMaterial)
+  }
+
+  /**
+   * Washes the dice that are going back to a hand in the colour that says so.
+   * @param identifiers - The dice that made a group
+   */
+  markReturned(identifiers: string[]): void {
+    this.paint(identifiers, this.matchedMaterial)
+  }
+
+  /**
+   * Sends the named dice out of the bowl.
+   *
+   * They leave the way a spilled die leaves — shrinking away and then being
+   * culled — rather than being deleted where they stand, so a die taken by the
+   * verdict and a die that missed the bowl are seen to go the same way. It also
+   * holds the bowl as unsettled until the last of them has gone, which is what
+   * keeps the match's own bowl from being applied over the top of the exit.
+   * @param identifiers - The dice the verdict has taken
+   */
+  dismiss(identifiers: string[]): void {
+    for (const die of this.dice) {
+      if (identifiers.includes(die.id)) {
+        die.markOutOfPlay()
+      }
+    }
   }
 
   /**
@@ -159,6 +204,12 @@ export class Dice {
     if (world === null) {
       return
     }
+
+    // Whatever a verdict painted is painted back. A bowl arriving from the
+    // match is the point every player's table converges again, appearance
+    // included: a die still washed here is one this player is part way through
+    // a verdict the match has already moved on from.
+    this.clearWashes()
 
     this.wanted.clear()
 
@@ -194,7 +245,8 @@ export class Dice {
     }
 
     for (const snapshot of this.wanted.values()) {
-      const die = Die.resting(world, this.buildMeshes(), snapshot)
+      const built = this.buildMeshes()
+      const die = Die.resting(world, built.group, built.shell, snapshot)
 
       this.group.add(die.object)
       this.dice.push(die)
@@ -230,6 +282,44 @@ export class Dice {
     this.pipGeometry.dispose()
     this.bodyMaterial.dispose()
     this.pipMaterial.dispose()
+    this.removedMaterial.dispose()
+    this.matchedMaterial.dispose()
+  }
+
+  /**
+   * Puts a wash on the named dice and leaves every other die alone.
+   * @param identifiers - The dice to paint
+   * @param material - What to paint them with
+   */
+  private paint(identifiers: string[], material: MeshPhysicalMaterial): void {
+    for (const die of this.dice) {
+      if (identifiers.includes(die.id)) {
+        die.applyMaterial(material)
+      }
+    }
+  }
+
+  /** Puts every die back in its own bone. */
+  private clearWashes(): void {
+    for (const die of this.dice) {
+      die.applyMaterial(this.bodyMaterial)
+    }
+  }
+
+  /**
+   * Builds one of the verdict's washes: the die's own material in a different
+   * colour, so a washed die is lit and polished exactly as it was before.
+   * @param color - The colour to wash in
+   * @returns The material, shared by every die the verdict paints with it
+   */
+  private buildWash(color: number): MeshPhysicalMaterial {
+    return new MeshPhysicalMaterial({
+      color: color,
+      roughness: DIE_ROUGHNESS,
+      metalness: 0,
+      clearcoat: DIE_CLEARCOAT,
+      clearcoatRoughness: DIE_CLEARCOAT_ROUGHNESS,
+    })
   }
 
   /**
@@ -280,20 +370,28 @@ export class Dice {
 
   /**
    * Builds the meshes for one die, over the shared geometry and materials.
-   * @returns The die's visual half, ready to be positioned from its body
+   *
+   * The body is handed back beside the group holding it. It is the half a
+   * verdict's wash goes on, and a die that had to find it among its own
+   * children would be a die that knows how it was assembled.
+   * @returns The die's visual half, and the body within it
    */
-  private buildMeshes(): Object3D {
-    const meshes = new Group()
-    const body = new Mesh(this.bodyGeometry, this.bodyMaterial)
+  private buildMeshes(): {group: Group,
+    shell: Mesh} {
+    const group = new Group()
+    const shell = new Mesh(this.bodyGeometry, this.bodyMaterial)
     const pips = new Mesh(this.pipGeometry, this.pipMaterial)
 
-    body.castShadow = true
-    body.receiveShadow = true
+    shell.castShadow = true
+    shell.receiveShadow = true
     pips.castShadow = true
 
-    meshes.add(body, pips)
+    group.add(shell, pips)
 
-    return meshes
+    return {
+      group: group,
+      shell: shell,
+    }
   }
 
   /**
@@ -306,25 +404,16 @@ export class Dice {
    * @returns The merged pip geometry, in the die's own frame
    */
   private static buildPipGeometry(): BufferGeometry {
-    // One face normal per value, in value order. Opposite faces sum to seven
-    // on a real die, which is what pairs one with six down the z axis, two
-    // with five down x, and three with four down y.
-    const normals = [
-      new Vector3(0, 0, 1),
-      new Vector3(1, 0, 0),
-      new Vector3(0, 1, 0),
-      new Vector3(0, -1, 0),
-      new Vector3(-1, 0, 0),
-      new Vector3(0, 0, -1),
-    ]
-
     const forward = new Vector3(0, 0, 1) // The face the patterns are laid out on
     const pips: SphereGeometry[] = []
 
+    // The same normals the value of a resting die is read off. Laying the pips
+    // out along one list and reading the face off another is the one way this
+    // die could come to show a number it does not have.
     for (const [
       index,
       normal,
-    ] of normals.entries()) {
+    ] of DIE_FACE_NORMALS.entries()) {
       const orientation = new Quaternion().setFromUnitVectors(forward, normal)
 
       for (const offset of Dice.pipPattern(index + 1)) {

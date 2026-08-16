@@ -1,4 +1,4 @@
-import type {DieSnapshot, ThrowLaunch} from '@/scene/die_state'
+import type {DieSnapshot, ThrowLaunch, ThrowResolution, ThrownDie} from '@/scene/die_state'
 
 /**
  * The shape of a match as it is stored, and the readers that turn a stored
@@ -11,8 +11,8 @@ import type {DieSnapshot, ThrowLaunch} from '@/scene/die_state'
  * than at a scene built from nonsense.
  */
 
-/** Whether the match is still filling its seats, or being played. */
-export type MatchPhase = 'lobby' | 'playing'
+/** Whether the match is still filling its seats, being played, or over. */
+export type MatchPhase = 'lobby' | 'playing' | 'finished'
 
 export interface MatchPlayer {
   uid: string
@@ -24,10 +24,44 @@ export interface MatchState {
   playerCount: number
   phase: MatchPhase
   players: MatchPlayer[] // In the order they joined, which is the order they play in
+
+  /**
+   * How many dice each player is holding, by identifier.
+   *
+   * Kept apart from players rather than on it, because the two change at
+   * completely different rates: the seats are written once and never again,
+   * while this is rewritten by every throw. An unreadable seat list makes the
+   * whole match vanish, and nothing rewritten that often should be able to do
+   * that.
+   *
+   * A hand is charged the moment its dice leave it and paid back only when the
+   * throw is judged, so zero on its own is not elimination — a player whose
+   * dice are still in the air is holding nothing and is very much still in.
+   * Zero *once that throw has been judged* is elimination, and needs no flag
+   * beside it to say so: a hand only ever grows by its own player pairing dice,
+   * which needs their turn, which is skipped once they have none. Past that
+   * point nothing in the game can take a hand off zero, and it is a one-way
+   * door.
+   */
+  pools: Record<string, number>
+
   turnIndex: number // Into players
   hasThrown: boolean // Whether the player whose turn it is may pass yet
   bowl: DieSnapshot[] // Authoritative; every player's bowl is set from this
   throwSeq: number // The last throw made, and the name of the die it produced
+
+  /**
+   * What the last throw came to, kept so that every player watches the same
+   * dice being taken out of the bowl for the same stated reason.
+   *
+   * It is a replay and not a state: the bowl above already holds where this
+   * ends up. Null before the first throw of a match, and — deliberately —
+   * whenever it cannot be read, since a verdict nobody can follow is only a
+   * missed animation, while a bowl nobody can read is a match nobody can play.
+   */
+  verdict: ThrowResolution | null
+
+  winner: string | null // Set with the finished phase, and never unset
 
   /**
    * Counts every write to the bowl above, and nothing else.
@@ -45,12 +79,15 @@ export interface MatchState {
   bowlVersion: number
 }
 
-/** One throw, as the player who made it described it. */
+/**
+ * One throw, as the player who made it described it. A list of dice rather than
+ * a single one, because a turn that begins with an empty bowl throws a whole
+ * hand on one gesture — and is still one throw.
+ */
 export interface ThrowRecord {
   seq: number
   uid: string
-  dieId: string
-  launch: ThrowLaunch
+  dice: ThrownDie[]
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -130,6 +167,23 @@ function readQuadruple(value: unknown): [number, number, number, number] | null 
   ]
 }
 
+/**
+ * Reads a die's value, which is the one field here with a range worth stating.
+ * Everything else is a coordinate and any number is a possible one; a face
+ * outside one to six is a die the rules would judge and never remove.
+ * @param value - The field as it came out of the document
+ * @returns The value, or null if it is not a face a die has
+ */
+function readFace(value: unknown): number | null {
+  const face = readNumber(value)
+
+  if (face === null || !Number.isInteger(face) || face < 1 || face > 6) {
+    return null
+  }
+
+  return face
+}
+
 function readDieSnapshot(value: unknown): DieSnapshot | null {
   if (!isRecord(value)) {
     return null
@@ -138,8 +192,9 @@ function readDieSnapshot(value: unknown): DieSnapshot | null {
   const id = readString(value.id)
   const position = readTriple(value.position)
   const rotation = readQuadruple(value.rotation)
+  const face = readFace(value.face)
 
-  if (id === null || position === null || rotation === null) {
+  if (id === null || position === null || rotation === null || face === null) {
     return null
   }
 
@@ -147,7 +202,92 @@ function readDieSnapshot(value: unknown): DieSnapshot | null {
     id: id,
     position: position,
     rotation: rotation,
+    face: face,
   }
+}
+
+/**
+ * Reads a run of identifiers, which is how a verdict names the dice it took.
+ * @param value - The field as it came out of the document
+ * @returns The identifiers, or null if any of them could not be read
+ */
+function readStrings(value: unknown): string[] | null {
+  if (!isArray(value)) {
+    return null
+  }
+
+  const strings: string[] = []
+
+  for (const entry of value) {
+    const text = readString(entry)
+
+    if (text === null) {
+      return null
+    }
+
+    strings.push(text)
+  }
+
+  return strings
+}
+
+/**
+ * Reads the last throw's verdict.
+ * @param value - The field as it came out of the document
+ * @returns The verdict, or null if there is nothing followable there
+ */
+function readResolution(value: unknown): ThrowResolution | null {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const seq = readNumber(value.seq)
+  const atRest = readBowl(value.atRest)
+  const removed = readStrings(value.removed)
+  const returned = readStrings(value.returned)
+
+  if (seq === null || atRest === null || removed === null || returned === null) {
+    return null
+  }
+
+  return {
+    seq: seq,
+    atRest: atRest,
+    removed: removed,
+    returned: returned,
+  }
+}
+
+/**
+ * Reads every player's hand.
+ *
+ * A hand belonging to nobody at the table is kept rather than refused: seats
+ * are written once and hands are rewritten by every throw, so the two are read
+ * against each other where they are used and not here.
+ * @param value - The field as it came out of the document
+ * @returns Every hand, or null if any count could not be read
+ */
+function readPools(value: unknown): Record<string, number> | null {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const pools: Record<string, number> = {}
+
+  for (const [
+    uid,
+    count,
+  ] of Object.entries(value)) {
+    const size = readNumber(count)
+
+    if (size === null) {
+      return null
+    }
+
+    pools[uid] = size
+  }
+
+  return pools
 }
 
 /**
@@ -237,12 +377,13 @@ export function parseMatchState(code: string, value: unknown): MatchState | null
   const playerCount = readNumber(value.playerCount)
   const phase = readString(value.phase)
   const players = readPlayers(value.players)
+  const pools = readPools(value.pools)
   const turnIndex = readNumber(value.turnIndex)
   const bowl = readBowl(value.bowl)
   const throwSeq = readNumber(value.throwSeq)
   const bowlVersion = readNumber(value.bowlVersion)
 
-  if (playerCount === null || players === null || turnIndex === null) {
+  if (playerCount === null || players === null || pools === null || turnIndex === null) {
     return null
   }
 
@@ -250,7 +391,7 @@ export function parseMatchState(code: string, value: unknown): MatchState | null
     return null
   }
 
-  if (phase !== 'lobby' && phase !== 'playing') {
+  if (phase !== 'lobby' && phase !== 'playing' && phase !== 'finished') {
     return null
   }
 
@@ -259,10 +400,18 @@ export function parseMatchState(code: string, value: unknown): MatchState | null
     playerCount: playerCount,
     phase: phase,
     players: players,
+    pools: pools,
     turnIndex: turnIndex,
     hasThrown: value.hasThrown === true,
     bowl: bowl,
     throwSeq: throwSeq,
+
+    // Absent before the first throw, and read leniently: an unreadable verdict
+    // costs a player the sight of the dice being taken out, which is a great
+    // deal less than refusing them the match it happened in
+    verdict: readResolution(value.verdict),
+
+    winner: readString(value.winner),
     bowlVersion: bowlVersion,
   }
 }
@@ -279,17 +428,50 @@ export function parseThrowRecord(value: unknown): ThrowRecord | null {
 
   const seq = readNumber(value.seq)
   const uid = readString(value.uid)
-  const dieId = readString(value.dieId)
-  const launch = readLaunch(value)
+  const dice = readThrownDice(value.dice)
 
-  if (seq === null || uid === null || dieId === null || launch === null) {
+  if (seq === null || uid === null || dice === null) {
     return null
   }
 
   return {
     seq: seq,
     uid: uid,
-    dieId: dieId,
-    launch: launch,
+    dice: dice,
   }
+}
+
+/**
+ * Reads the dice of one throw. A throw with none of them fails rather than
+ * being played as nothing: every throw puts at least one die in the air, so an
+ * empty list is a document that was written wrong.
+ * @param value - The field as it came out of the document
+ * @returns Every die of the throw, or null if any of them could not be read
+ */
+function readThrownDice(value: unknown): ThrownDie[] | null {
+  if (!isArray(value) || value.length === 0) {
+    return null
+  }
+
+  const dice: ThrownDie[] = []
+
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      return null
+    }
+
+    const id = readString(entry.id)
+    const launch = readLaunch(entry)
+
+    if (id === null || launch === null) {
+      return null
+    }
+
+    dice.push({
+      id: id,
+      launch: launch,
+    })
+  }
+
+  return dice
 }

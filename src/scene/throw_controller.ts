@@ -10,6 +10,7 @@ import {AIM_DOT_COUNT,
   THROW_CLEARANCE_HEIGHT,
   THROW_CLEARANCE_RADIUS,
   THROW_DESCENT_ANGLE,
+  THROW_FAN_RADIUS,
   THROW_FLIGHT_TIME,
   THROW_LAUNCH_CAMERA_MARGIN,
   THROW_MAX_RADIUS,
@@ -54,8 +55,9 @@ export class ThrowController {
   private readonly camera: PerspectiveCamera
   private readonly physics: PhysicsWorld
   private readonly preview: AimPreview
-  private readonly launch: (launch: ThrowLaunch) => void // Where a finished gesture goes
+  private readonly launch: (launches: ThrowLaunch[]) => void // Where a finished gesture goes
   private enabled = false // Off until it is this player's turn; a match starts with someone else's
+  private count = 1 // How many dice the next gesture throws; more than one is an all-in turn
 
   private readonly raycaster = new Raycaster()
   private readonly table = new Plane(new Vector3(0, 1, 0), 0) // The felt, at height zero
@@ -75,7 +77,7 @@ export class ThrowController {
     camera: PerspectiveCamera,
     physics: PhysicsWorld,
     preview: AimPreview,
-    launch: (launch: ThrowLaunch) => void,
+    launch: (launches: ThrowLaunch[]) => void,
   ) {
     this.canvas = canvas
     this.camera = camera
@@ -100,6 +102,18 @@ export class ThrowController {
     if (!enabled) {
       this.cancel()
     }
+  }
+
+  /**
+   * How many dice the next gesture puts in the air. One on an ordinary turn,
+   * and the player's whole hand on a turn that begins with an empty bowl.
+   *
+   * It is set rather than passed with the gesture because it also widens the
+   * clearance the launch has to make: a fanned throw needs the whole ring of it
+   * to start clear of the bowl, not just its centre.
+   */
+  set throwCount(count: number) {
+    this.count = Math.max(count, 1)
   }
 
   dispose(): void {
@@ -191,7 +205,7 @@ export class ThrowController {
       this.clampToThrowRadius(this.launchGround)
 
       if (this.buildLaunch()) {
-        this.launch(this.describeLaunch())
+        this.launch(this.describeLaunches())
       }
     }
 
@@ -322,9 +336,16 @@ export class ThrowController {
     // place. Lifting again can only carry it further in, so once at the
     // clearance height — which is above every part of the bowl — it is clear
     // wherever it has ended up.
+    //
+    // A fan is tested by its outer edge rather than its centre. The ring is
+    // flat, so every die of it sits at the launch's own height, and a launch
+    // that clears the bowl by the ring's radius carries the whole fan over.
     const radius = Math.hypot(this.launchOrigin.x, this.launchOrigin.z)
+    const clearance = this.count > 1
+      ? THROW_CLEARANCE_RADIUS + THROW_FAN_RADIUS
+      : THROW_CLEARANCE_RADIUS
 
-    if (radius < THROW_CLEARANCE_RADIUS && this.launchOrigin.y < THROW_CLEARANCE_HEIGHT) {
+    if (radius < clearance && this.launchOrigin.y < THROW_CLEARANCE_HEIGHT) {
       this.liftLaunch(THROW_CLEARANCE_HEIGHT)
     }
 
@@ -342,41 +363,79 @@ export class ThrowController {
   }
 
   /**
-   * Packages the throw as it currently stands, together with the attitude and
-   * the tumble it is to leave the hand with.
+   * Packages the throw as it currently stands — every die of it, each with the
+   * attitude and the tumble it is to leave the hand with.
    *
-   * Both are drawn here rather than where the die is built. Every player in the
-   * match builds a die from this same description, and a random value rolled at
-   * the far end is the one thing that would guarantee they built different ones.
+   * Those are drawn here rather than where the dice are built. Every player in
+   * the match builds from this same description, and a random value rolled at
+   * the far end is the one thing that would guarantee they built different ones
+   * — which is also why the whole fan is described rather than a count and a
+   * rule for spreading it out.
+   *
+   * Every die of a fan is given the same velocity. What separates them is where
+   * they start and how they are turning, which is enough: they arrive as a
+   * loose group, and what a bowl full of dice does to itself does the rest.
    * @returns The throw, ready both to be sent and to be made
    */
-  private describeLaunch(): ThrowLaunch {
-    const orientation = ThrowController.randomOrientation()
-    const spin = ThrowController.randomSpin()
+  private describeLaunches(): ThrowLaunch[] {
+    const launches: ThrowLaunch[] = []
 
-    return {
-      origin: [
-        this.launchOrigin.x,
-        this.launchOrigin.y,
-        this.launchOrigin.z,
-      ],
-      velocity: [
-        this.launchVelocity.x,
-        this.launchVelocity.y,
-        this.launchVelocity.z,
-      ],
-      orientation: [
-        orientation.x,
-        orientation.y,
-        orientation.z,
-        orientation.w,
-      ],
-      angularVelocity: [
-        spin.x,
-        spin.y,
-        spin.z,
-      ],
+    for (let index = 0; index < this.count; index++) {
+      const orientation = ThrowController.randomOrientation()
+      const spin = ThrowController.randomSpin()
+      const offset = ThrowController.fanOffset(index, this.count)
+
+      launches.push({
+        origin: [
+          this.launchOrigin.x + offset.x,
+          this.launchOrigin.y,
+          this.launchOrigin.z + offset.z,
+        ],
+        velocity: [
+          this.launchVelocity.x,
+          this.launchVelocity.y,
+          this.launchVelocity.z,
+        ],
+        orientation: [
+          orientation.x,
+          orientation.y,
+          orientation.z,
+          orientation.w,
+        ],
+        angularVelocity: [
+          spin.x,
+          spin.y,
+          spin.z,
+        ],
+      })
     }
+
+    return launches
+  }
+
+  /**
+   * Where one die of a fan starts, relative to the launch itself.
+   *
+   * Spread around a flat ring rather than along a line. A line of six dice is
+   * seven die widths across and has to be aimed somewhere; a ring is the same
+   * throw from every side of the hand, and it keeps the whole fan the same
+   * distance out from the bowl — which is what one clearance test can cover.
+   * @param index - Which die of the fan this is
+   * @param count - How many dice the fan holds
+   * @returns The offset, level with the launch
+   */
+  private static fanOffset(index: number, count: number): Vector3 {
+    if (count < 2) {
+      return new Vector3()
+    }
+
+    const angle = index / count * Math.PI * 2
+
+    return new Vector3(
+      Math.cos(angle) * THROW_FAN_RADIUS,
+      0,
+      Math.sin(angle) * THROW_FAN_RADIUS,
+    )
   }
 
   /**

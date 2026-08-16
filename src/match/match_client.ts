@@ -14,8 +14,9 @@ import {createMatchCode} from '@/match/codes'
 import {currentPlayerId, firestore} from '@/match/firebase'
 import {parseMatchState, parseThrowRecord} from '@/match/match_state'
 import type {MatchState, ThrowRecord} from '@/match/match_state'
+import {STARTING_POOL, nextActivePlayer, resolveThrow} from '@/match/rules'
 import {createOpeningDie} from '@/scene/die_state'
-import type {DieSnapshot, ThrowLaunch} from '@/scene/die_state'
+import type {DieSnapshot, ThrownDie} from '@/scene/die_state'
 
 const MATCHES = 'matches'
 const THROWS = 'throws'
@@ -99,10 +100,15 @@ export class MatchClient {
               name: name,
             },
           ],
+          pools: {
+            [playerId]: STARTING_POOL,
+          },
           turnIndex: 0,
           hasThrown: false,
           bowl: [],
           throwSeq: 0,
+          verdict: null,
+          winner: null,
           bowlVersion: 0,
           createdAt: serverTimestamp(),
         })
@@ -162,6 +168,10 @@ export class MatchClient {
 
       const update: Record<string, unknown> = {
         players: players,
+        pools: {
+          ...state.pools,
+          [playerId]: STARTING_POOL,
+        },
       }
 
       if (players.length === state.playerCount) {
@@ -244,67 +254,115 @@ export class MatchClient {
   }
 
   /**
-   * Records a throw, and marks the turn as having had one.
+   * Records a throw, takes its dice out of this player's hand, and marks the
+   * turn as having had one.
    *
-   * Written after the die is already flying here rather than before. The
+   * Written after the dice are already flying here rather than before. The
    * thrower is the authority on what happens next, so there is nothing to wait
    * for, and waiting would put a database round trip between a hand and a die.
-   * @param seq - This throw's number, which is also the die's name
-   * @param launch - The throw as it was made
+   *
+   * The hand is charged here rather than when the throw is judged, so that
+   * everyone watching sees the count drop as the dice leave rather than four
+   * seconds later. What comes back from a group is added when the verdict is
+   * written, on top of a hand this has already emptied.
+   * @param seq - This throw's number, which every die of it is named after
+   * @param dice - Every die of the throw, as this player described them
    */
-  async submitThrow(seq: number, launch: ThrowLaunch): Promise<void> {
+  async submitThrow(seq: number, dice: ThrownDie[]): Promise<void> {
     const batch = writeBatch(firestore)
 
     batch.set(doc(this.reference, THROWS, String(seq)), {
       seq: seq,
       uid: this.playerId,
-      dieId: String(seq),
-      origin: launch.origin,
-      velocity: launch.velocity,
-      orientation: launch.orientation,
-      angularVelocity: launch.angularVelocity,
-      result: null,
+      dice: dice.map((die) => ({
+        id: die.id,
+        origin: die.launch.origin,
+        velocity: die.launch.velocity,
+        orientation: die.launch.orientation,
+        angularVelocity: die.launch.angularVelocity,
+      })),
     })
 
     batch.update(this.reference, {
       throwSeq: seq,
       hasThrown: true,
+      [`pools.${this.playerId}`]: increment(-dice.length),
     })
 
     await batch.commit()
   }
 
   /**
-   * Publishes where the dice came to rest.
+   * Judges a bowl that has come to rest and publishes everything that follows
+   * from it: what leaves, what goes back to a hand, whose turn it is, and
+   * whether the match is over.
    *
-   * The bowl goes onto the match and onto the throw in one batch. Split apart,
-   * a player could read a match whose throw is finished but whose bowl is still
-   * the one from before it — a torn state that every other player would then
-   * set their own dice from.
+   * All of it in one transaction, and all of it in one write. Split apart, a
+   * player could read a match whose bowl has been emptied but whose hands have
+   * not been paid — a torn state every other player would then set their own
+   * dice from. A transaction rather than a batch because the same throw can be
+   * judged by more than one player: whoever threw it does so as soon as their
+   * dice stop, and if they leave without ever managing it, the next player at
+   * the table does it from their own simulation instead. The first to arrive is
+   * the one that counts, and the rest find the work already done.
    * @param seq - The throw that has just finished
-   * @param bowl - Every die in the bowl, as it now stands
+   * @param atRest - Every die in the bowl as it stopped, from this player's own table
    */
-  async submitResult(seq: number, bowl: DieSnapshot[]): Promise<void> {
-    const batch = writeBatch(firestore)
+  async submitVerdict(seq: number, atRest: DieSnapshot[]): Promise<void> {
+    await runTransaction(firestore, async (transaction) => {
+      const snapshot = await transaction.get(this.reference)
+      const state = parseMatchState(this.code, snapshot.data())
 
-    batch.update(doc(this.reference, THROWS, String(seq)), {
-      result: bowl,
-    })
-    batch.update(this.reference, {
-      bowl: bowl,
-      bowlVersion: increment(1),
-    })
+      if (state === null || state.phase !== 'playing') {
+        return
+      }
 
-    await batch.commit()
+      // Already judged, by the thrower or by whoever stepped in first
+      if (state.throwSeq !== seq || (state.verdict !== null && state.verdict.seq >= seq)) {
+        return
+      }
+
+      const outcome = resolveThrow(state, seq, atRest)
+
+      // Judging somebody else's throw means they never managed it themselves,
+      // which is the whole reason this path exists. The rules would leave the
+      // turn with a player who paired nothing so they can choose to throw
+      // again — but a player who has left the table cannot choose, and only
+      // they could pass. The turn is handed on for them, or the bowl is rescued
+      // and the match still never moves.
+      const thrower = state.players[state.turnIndex]
+      const contested = thrower === undefined || thrower.uid !== this.playerId
+      const turnIndex = contested && outcome.turnIndex === state.turnIndex
+        ? nextActivePlayer(state.players, outcome.pools, state.turnIndex)
+        : outcome.turnIndex
+
+      transaction.update(this.reference, {
+        bowl: outcome.bowl,
+        pools: outcome.pools,
+        turnIndex: turnIndex,
+
+        // The turn only stays with a player who threw without pairing anything,
+        // and they are the only player the Pass button is ever offered to
+        hasThrown: turnIndex === state.turnIndex,
+
+        verdict: outcome.resolution,
+        winner: outcome.winner,
+        phase: outcome.winner === null ? 'playing' : 'finished',
+
+        // Read in this same transaction, so it is counted rather than incremented
+        bowlVersion: state.bowlVersion + 1,
+      })
+    })
   }
 
   /**
-   * Ends this player's turn and hands it on in joining order.
+   * Ends this player's turn and hands it on, over anyone with nothing left to
+   * throw.
    * @param state - The match as it currently stands
    */
   async pass(state: MatchState): Promise<void> {
     await updateDoc(this.reference, {
-      turnIndex: (state.turnIndex + 1) % state.players.length,
+      turnIndex: nextActivePlayer(state.players, state.pools, state.turnIndex),
       hasThrown: false,
     })
   }
