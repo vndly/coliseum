@@ -1,7 +1,7 @@
 {
   "projects": {
-    "default": "atomic-prototype",
-    "local": "atomic-prototype",
-    "remote": "atomic-prototype"
+    "default": "coliseum-game",
+    "local": "coliseum-game",
+    "remote": "coliseum-game"
   }
 }

@@ -11,12 +11,12 @@ import {getFirestore} from 'firebase/firestore'
  * it is a measurable amount of bundle for a game that measures nothing.
  */
 const firebaseConfig = {
-  apiKey: 'AIzaSyBbB_8eQFJx2Ah4YBKcB6roM8gqRb9Z_Lw',
-  authDomain: 'atomic-prototype.firebaseapp.com',
-  projectId: 'atomic-prototype',
-  storageBucket: 'atomic-prototype.firebasestorage.app',
-  messagingSenderId: '1079322227234',
-  appId: '1:1079322227234:web:3a79e55e7d553f5abed07b',
+  apiKey: 'AIzaSyDIF2WYLkR9jdr_yV739N_F1fzVv_HuPSU',
+  authDomain: 'coliseum-game.firebaseapp.com',
+  projectId: 'coliseum-game',
+  storageBucket: 'coliseum-game.firebasestorage.app',
+  messagingSenderId: '788973501695',
+  appId: '1:788973501695:web:d851d4977b95c3cc2c20ca',
 }
 
 const app = initializeApp(firebaseConfig)
