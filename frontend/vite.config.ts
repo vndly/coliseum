@@ -15,4 +15,9 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(packageJson.version),
   },
+  build: {
+    // Firebase Hosting serves backend/public (see backend/firebase.json)
+    outDir: '../backend/public',
+    emptyOutDir: true,
+  },
 })
