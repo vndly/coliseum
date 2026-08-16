@@ -11,7 +11,7 @@ import {useRoute, useRouter} from 'vue-router'
 import DieFace from '@/components/die_face.vue'
 import {MatchClient} from '@/match/match_client'
 import type {MatchPlayer, MatchState, ThrowRecord} from '@/match/match_state'
-import {isAllIn, nextActivePlayer, poolSize, throwSize} from '@/match/rules'
+import {nextActivePlayer, poolSize, throwSize} from '@/match/rules'
 import type {ThrowLaunch} from '@/scene/die_state'
 import {DIE_LIMIT} from '@/scene/dimensions'
 import {DishScene} from '@/scene/dish_scene'
@@ -96,8 +96,6 @@ const eliminated = computed<boolean>(
   () => !inLobby.value && uid.value !== '' && judged.value && myPool.value <= 0,
 )
 
-const allIn = computed<boolean>(() => state.value !== null && isAllIn(state.value))
-
 /** How many dice the next gesture on the canvas is to put in the air. */
 const handToThrow = computed<number>(() => {
   const match = state.value
@@ -147,19 +145,6 @@ const winnerLine = computed<string>(() => {
   return `${match.players.find((player) => player.uid === match.winner)?.name ?? 'Someone'} wins`
 })
 
-const winnerHand = computed<string>(() => {
-  const match = state.value
-  const winner = match?.winner ?? null
-
-  if (match === null || winner === null) {
-    return ''
-  }
-
-  const dice = poolSize(match, winner)
-
-  return dice === 1 ? 'One die left standing' : `${dice} dice left standing`
-})
-
 const seatsTaken = computed<number>(() => state.value?.players.length ?? 0)
 const seatsTotal = computed<number>(() => state.value?.playerCount ?? 0)
 
@@ -175,55 +160,6 @@ const waitingLine = computed<string>(() => {
   return empty === 1
     ? 'Waiting for one more player.'
     : `Waiting for ${empty} more players.`
-})
-
-const status = computed<string>(() => {
-  const match = state.value
-
-  if (match === null) {
-    return 'Finding the match'
-  }
-
-  // The dialog names the winner, and a line under it would only say it again
-  if (finished.value) {
-    return ''
-  }
-
-  if (eliminated.value) {
-    return 'You are out — watching to the end'
-  }
-
-  if (busy.value) {
-    return 'Rolling'
-  }
-
-  // The washes on the dice are the whole explanation, and a line beside them
-  // would be reading out what the player is already looking at
-  if (resolving.value) {
-    return ''
-  }
-
-  if (!isMyTurn.value) {
-    return `${activePlayer.value?.name ?? 'Someone'}'s turn`
-  }
-
-  if (bowlFull.value) {
-    return 'The bowl is full — pass to end your turn'
-  }
-
-  if (allIn.value) {
-    return 'The bowl is empty — throw your whole hand'
-  }
-
-  // Reached only on a turn that threw and paired nothing, since pairing hands
-  // the turn on by itself
-  if (match.hasThrown) {
-    return 'Nothing paired — throw again or pass'
-  }
-
-  // Nothing to say on a turn that is this player's and still open: the lit seat
-  // and the Pass button already carry it
-  return ''
 })
 
 // The gesture is closed off the moment the turn is not this player's, so a
@@ -627,11 +563,10 @@ onBeforeUnmount(() => {
         </ul>
       </header>
 
+      <!-- Nothing is said down here. The lit seat, the hand counts and the
+           washes on the dice carry the state of play between them, and a line
+           reading it back would only name what the player is looking at. -->
       <footer class="chrome__bottom">
-        <p v-if="status" class="chrome__status" :class="{'chrome__status--mine': isMyTurn}">
-          {{ status }}
-        </p>
-
         <button
           v-if="canPass"
           type="button"
@@ -661,7 +596,6 @@ onBeforeUnmount(() => {
       <div class="notice__card" role="dialog" aria-labelledby="winner-heading">
         <p class="label">Match over</p>
         <p id="winner-heading" class="notice__winner">{{ winnerLine }}</p>
-        <p class="notice__hand">{{ winnerHand }}</p>
 
         <button type="button" class="action" @click="onLeave">
           Back to lobby
@@ -944,15 +878,6 @@ onBeforeUnmount(() => {
     gap: 1rem;
 }
 
-.chrome__status {
-    font-size: 0.9375rem;
-    color: var(--bone-dim);
-}
-
-.chrome__status--mine {
-    color: var(--baize-lit);
-}
-
 .action {
     padding: 0.625rem 1.5rem;
     border: 0;
@@ -1011,18 +936,11 @@ onBeforeUnmount(() => {
    only thing on this screen set large in the interface's own face, which is
    what keeps the two kinds of value from reading as the same thing. */
 .notice__winner {
-    margin-top: 0.75rem;
+    margin: 0.75rem 0 1.5rem;
     font-size: 2rem;
     font-weight: 600;
     line-height: 1.1;
     color: var(--brass);
-}
-
-.notice__hand {
-    margin: 0.375rem 0 1.5rem;
-    font-family: var(--font-mono);
-    font-size: 0.8125rem;
-    color: var(--bone-faint);
 }
 
 .error {
