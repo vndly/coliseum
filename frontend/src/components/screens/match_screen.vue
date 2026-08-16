@@ -686,9 +686,8 @@ onBeforeUnmount(() => {
     <div v-if="showLeave" class="notice">
       <div class="notice__card" role="dialog" aria-labelledby="leave-heading">
         <p id="leave-heading" class="label">Leave the match</p>
-        <p class="notice__line">Your seat and your dice are kept. The code brings you back.</p>
 
-        <div class="notice__answers">
+        <div class="notice__answers notice__answers--spaced">
           <button type="button" class="action" @click="onCancelLeave">
             Stay
           </button>
@@ -1062,6 +1061,12 @@ onBeforeUnmount(() => {
     display: flex;
     flex-direction: column;
     gap: 0.625rem;
+}
+
+/* The leave card asks the whole question in its heading, so the space the other
+   cards get from the line under theirs has to come from here instead. */
+.notice__answers--spaced {
+    margin-top: 1.5rem;
 }
 
 .error {
