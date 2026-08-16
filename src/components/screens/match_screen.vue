@@ -87,14 +87,16 @@ const status = computed<string>(() => {
   }
 
   if (!isMyTurn.value) {
-    return `${activePlayer.value?.name ?? 'Someone'} is up`
+    return `${activePlayer.value?.name ?? 'Someone'}'s turn`
   }
 
   if (bowlFull.value) {
     return 'The bowl is full — pass to end your turn'
   }
 
-  return match.hasThrown ? 'Throw again, or pass' : 'Drag across the bowl to throw'
+  // Nothing to say on a turn that is this player's and still open: the lit seat
+  // and the Pass button already carry it
+  return ''
 })
 
 // The gesture is closed off the moment the turn is not this player's, so a
@@ -340,8 +342,6 @@ onBeforeUnmount(() => {
 
     <div v-else class="chrome">
       <header class="chrome__top">
-        <p class="chrome__code">{{ code }}</p>
-
         <ul class="rail">
           <li
             v-for="(player, seat) in state?.players ?? []"
@@ -356,7 +356,9 @@ onBeforeUnmount(() => {
       </header>
 
       <footer class="chrome__bottom">
-        <p class="chrome__status" :class="{'chrome__status--mine': isMyTurn}">{{ status }}</p>
+        <p v-if="status" class="chrome__status" :class="{'chrome__status--mine': isMyTurn}">
+          {{ status }}
+        </p>
 
         <button
           v-if="canPass"
@@ -539,16 +541,8 @@ onBeforeUnmount(() => {
 .chrome__top {
     display: flex;
     align-items: flex-start;
-    justify-content: space-between;
+    justify-content: flex-end;
     gap: 1rem;
-}
-
-.chrome__code {
-    font-family: var(--font-mono);
-    font-size: 0.875rem;
-    font-weight: 500;
-    letter-spacing: 0.2em;
-    color: var(--bone-faint);
 }
 
 .rail {
@@ -562,8 +556,11 @@ onBeforeUnmount(() => {
 .rail__player {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.375rem 0.625rem 0.375rem 0.375rem;
+    gap: 0.625rem;
+
+    /* Tighter on the left: the die face is already inset by its own corners,
+       so an even pill would sit lopsided */
+    padding: 0.625rem 1rem 0.625rem 0.75rem;
     border: 1px solid transparent;
     border-radius: 999px;
     background: rgb(14 18 16 / 55%);
