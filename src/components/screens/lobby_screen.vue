@@ -227,6 +227,7 @@ function onPaste(): void {
           class="switch__option"
           :class="{'switch__option--on': mode === 'create'}"
           :aria-pressed="mode === 'create'"
+          :disabled="busy"
           @click="chooseMode('create')"
         >
           New match
@@ -236,6 +237,7 @@ function onPaste(): void {
           class="switch__option"
           :class="{'switch__option--on': mode === 'join'}"
           :aria-pressed="mode === 'join'"
+          :disabled="busy"
           @click="chooseMode('join')"
         >
           Join a match
@@ -250,6 +252,7 @@ function onPaste(): void {
             class="field__input"
             type="text"
             :maxlength="NAME_LIMIT"
+            :disabled="busy"
             autocomplete="nickname"
             placeholder="Ana"
           >
@@ -269,6 +272,7 @@ function onPaste(): void {
                 :class="{'counts__option--on': playerCount === count}"
                 :aria-pressed="playerCount === count"
                 :aria-label="`${count} players`"
+                :disabled="busy"
                 @click="playerCount = count"
               >
                 <DieFace :value="count" :lit="playerCount === count" />
@@ -279,6 +283,7 @@ function onPaste(): void {
           <button
             type="submit"
             class="action"
+            :class="{'action--busy': busy}"
             :disabled="!canCreate"
             @click="onCreate"
           >
@@ -300,6 +305,7 @@ function onPaste(): void {
                 class="field__input field__input--code"
                 type="text"
                 :maxlength="CODE_LENGTH"
+                :disabled="busy"
                 autocapitalize="characters"
                 autocomplete="off"
                 spellcheck="false"
@@ -311,6 +317,7 @@ function onPaste(): void {
                 type="button"
                 class="paste"
                 aria-label="Paste the code"
+                :disabled="busy"
                 @click="onPaste"
               >
                 <svg class="paste__icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -324,6 +331,7 @@ function onPaste(): void {
           <button
             type="submit"
             class="action"
+            :class="{'action--busy': busy}"
             :disabled="!canJoin"
             @click="onJoin"
           >
@@ -417,6 +425,18 @@ function onPaste(): void {
     margin-top: 1.5rem;
 }
 
+/* The card goes quiet the moment a match is being made: the press has been
+   taken, and nothing here can be touched again until it is answered. The button
+   that was pressed is the exception, further down — it is carrying the only
+   word about what the card is doing, so it does not dim with the rest */
+.switch__option:disabled,
+.field__input:disabled,
+.counts__option:disabled,
+.paste:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
 .field {
     display: flex;
     flex-direction: column;
@@ -445,7 +465,7 @@ function onPaste(): void {
     color: var(--bone-faint);
 }
 
-.field__input:hover {
+.field__input:hover:not(:disabled) {
     border-color: var(--brass);
 }
 
@@ -481,7 +501,7 @@ function onPaste(): void {
     transition: background 160ms ease, color 160ms ease;
 }
 
-.paste:hover {
+.paste:hover:not(:disabled) {
     background: var(--brass-glow);
     color: var(--brass);
 }
@@ -536,8 +556,19 @@ function onPaste(): void {
     cursor: not-allowed;
 }
 
+/* Pressed and waiting, rather than not yet ready. The surface sinks to the same
+   brass-rimmed well the fields are cut into, and the word on it stays lit: it is
+   the only account of what the card is doing. Rimmed by an inset shadow rather
+   than a border, which would move the button as it was pressed */
+.action--busy:disabled {
+    background: var(--well);
+    color: var(--brass);
+    cursor: wait;
+    box-shadow: inset 0 0 0 1px var(--brass-edge);
+}
+
 .error {
     font-size: 0.875rem;
-    color: var(--brass);
+    color: var(--ember);
 }
 </style>

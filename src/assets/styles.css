@@ -15,9 +15,11 @@
     --bone: #f3ece0; /* DIE_COLOR */
     --pip: #18120e; /* DIE_PIP_COLOR */
 
-    /* The one colour with no counterpart in the scene: the warmth of the key
-       light, taken far enough towards the metal to read as a table fitting */
+    /* The two colours with no counterpart in the scene: the warmth of the key
+       light, taken far enough towards the metal to read as a table fitting, and
+       the coal that same light comes down to when something has gone wrong */
     --brass: #c8a468;
+    --ember: #e06a52;
 
     --panel: #1b1109; /* Walnut in shadow, for a surface raised off the ground */
     --well: #120b06; /* Walnut deeper still, for a surface cut into that one */
