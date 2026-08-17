@@ -11,10 +11,12 @@ import {Vector3} from 'three'
 import type {BufferGeometry} from 'three'
 import {BOWL_FRICTION,
   BOWL_RESTITUTION,
+  CONTACT_PREDICTION_DISTANCE,
   FELT_DEPTH,
   FELT_FRICTION,
   FELT_RESTITUTION,
   GRAVITY,
+  LENGTH_UNIT,
   MAX_FRAME_TIME,
   PHYSICS_TIMESTEP,
   TABLE_SIZE} from '@/scene/dimensions'
@@ -31,6 +33,20 @@ import {BOWL_FRICTION,
  *
  * The bowl's collider is built from the very triangles the bowl is drawn from,
  * so there is only ever one description of its shape.
+ *
+ * Every collider in the scene — these two and the dice — asks for Rapier's
+ * multiplying rule on both friction and restitution, and they all have to,
+ * because a pair that disagrees is resolved by a fixed precedence rather than
+ * by anything either collider meant. Multiplying is what lets the die's three
+ * pairings be set apart from one another: it is bouncy against another die,
+ * dull against the bowl and dead against the felt, which under an average
+ * would be three demands on one number. Anything added to this world has to
+ * ask for it too.
+ *
+ * What the rule costs is that a surface meant to grip or bounce harder than a
+ * die does can only say so by giving its own figure up to 1.0, since the
+ * product can never exceed either half. BOWL_FRICTION is the one that has had
+ * to, and it says so where it is stated.
  */
 export class PhysicsWorld {
   private simulation: World | null = null // Null until the WASM module has loaded
@@ -64,6 +80,17 @@ export class PhysicsWorld {
 
     const simulation = new World(new Vector3(0, GRAVITY, 0))
     simulation.timestep = PHYSICS_TIMESTEP
+
+    // Rapier sizes its own tolerances in metres, and this is what tells it how
+    // long a metre is here. Almost nothing it scales matters; the one that does
+    // is how far ahead the engine looks for a contact, which it puts far too
+    // high and which is taken back off it on the next line.
+    simulation.integrationParameters.lengthUnit = LENGTH_UNIT
+
+    // Stated in die widths like every other measurement here, and divided back
+    // out by the scale Rapier is about to multiply it by again.
+    simulation.integrationParameters.normalizedPredictionDistance
+      = CONTACT_PREDICTION_DISTANCE / LENGTH_UNIT
 
     PhysicsWorld.buildBowl(simulation, bowlGeometry)
 
@@ -222,6 +249,8 @@ export class PhysicsWorld {
     )
       .setFriction(BOWL_FRICTION)
       .setRestitution(BOWL_RESTITUTION)
+      .setFrictionCombineRule(CoefficientCombineRule.Multiply)
+      .setRestitutionCombineRule(CoefficientCombineRule.Multiply)
 
     simulation.createCollider(descriptor)
   }
@@ -230,15 +259,6 @@ export class PhysicsWorld {
    * Installs the felt as a solid slab whose top face sits exactly at table
    * height. It is the only collider that reports collision events, which makes
    * every event the engine produces a die arriving at or leaving the table.
-   *
-   * Its restitution is asked for as the minimum of the two materials rather
-   * than the average Rapier would otherwise take. A die is bouncy — it has to
-   * be, or a hit between two of them does nothing — and averaging that into the
-   * felt would leave a spilled die hopping across the table on its way to being
-   * culled. Two colliders that disagree about the rule are resolved in the
-   * fixed order average, minimum, product, maximum, so a felt asking for the
-   * minimum beats a die that never asked for anything and this is the only
-   * place the rule has to be stated.
    * @param simulation - The world to add the collider to
    * @returns The felt, kept so its own events can be told from a die's
    */
@@ -251,7 +271,8 @@ export class PhysicsWorld {
       .setTranslation(0, -FELT_DEPTH / 2, 0)
       .setFriction(FELT_FRICTION)
       .setRestitution(FELT_RESTITUTION)
-      .setRestitutionCombineRule(CoefficientCombineRule.Min)
+      .setFrictionCombineRule(CoefficientCombineRule.Multiply)
+      .setRestitutionCombineRule(CoefficientCombineRule.Multiply)
       .setActiveEvents(ActiveEvents.COLLISION_EVENTS)
 
     return simulation.createCollider(descriptor)

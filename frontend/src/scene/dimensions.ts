@@ -183,45 +183,45 @@ export const DIE_MASS = 1.0 // Every die is the same, so only the ratio to DIE_I
 export const DIE_INERTIA = DIE_MASS * DIE_SIZE * DIE_SIZE / 6
 
 /**
- * Polished resin on lacquer. Rapier averages the two materials in a contact,
- * and BOWL_FRICTION matches this, so a die grips at the full 0.45 either way —
- * against the bowl and against another die.
+ * Polished resin. Every collider in the scene asks for Rapier's multiplying
+ * rule, so what a pair of surfaces actually grips at is the product of the two
+ * — this squared is 0.30, which is what one die meets another with and the
+ * loosest pairing anywhere in the scene.
  *
- * Friction is what makes a struck die roll rather than skate. A die is knocked
- * across the floor with barely any spin of its own, and what turns it is the
- * drag under its own base: the floor holds the bottom while the top keeps
- * going, and the die goes over its leading edge. Below about this it slides
- * away intact.
+ * Low deliberately, and low only between dice. Two dice that grip each other
+ * hard trade the arriving die's direction for spin at the instant they touch,
+ * and the throw is spent on the die it happened to clip rather than carried
+ * into the bowl. It costs the struck die to raise it, which reads backwards
+ * and is not: at 0.45 between dice, and again at 0.55, fewer hits end on a new
+ * face than at this, because a die that is gripped is a die pushed away rather
+ * than driven down into the floor that could turn it over.
  *
- * Friction is also what ends a throw here rather than restitution — a glancing
- * hit on the wall turns almost all of a die's speed into spin, and the spin is
- * then eaten by whatever it is rolling on. Raising it therefore costs reach:
- * a die coming down the wall grabs sooner than it used to and settles closer
- * to where it first landed.
+ * The floor is what turns it. See BOWL_FRICTION, which carries that number.
  */
-export const DIE_FRICTION = 0.45
+export const DIE_FRICTION = 0.55
 
 /**
- * How hard two dice bounce off each other, and the one number that decides
- * whether a hit rearranges the bowl or just nudges it.
+ * How much of an impact a die gives back, as its own material rather than as
+ * anything about a particular collision. Multiplied by whatever it hits: 0.79
+ * against another die, 0.30 against the bowl, and 0.07 against the felt.
  *
- * A die on the floor is pinned there by a gravity twenty times the real one,
- * and it cannot roll without lifting its own centre of mass against it. The
- * throw arrives descending between 53° and 73°, so a hit drives the struck die
- * down into the floor rather than across it, and the floor takes back most of
- * the impulse within a step or two. Bouncing the two dice apart hard enough to
- * get the struck one off the floor for a moment is what gives it room to turn,
- * and this is where the room runs out: dropping it to 0.5 takes half the lift
- * back off the struck die, and a fifth of the hits that end on a new face with
- * it.
+ * Multiplying rather than averaging is what lets those three be set apart from
+ * one another at all. Under the average Rapier reaches for by default this
+ * number and the bowl's are a single shared quantity — a die bouncy enough to
+ * rearrange the bowl when it lands on another die drags the bowl's own figure
+ * up with it, and the bowl could only be held down by pushing this up, which
+ * put both wrong. The product leaves each surface stating one honest thing
+ * about itself and every pairing falling out of the two.
  *
- * It is deliberately not what a die meets any other surface with. Rapier
- * averages the two materials in a contact, so BOWL_RESTITUTION is set low to
- * hold the die against the bowl at 0.45, and the felt asks for the minimum
- * instead of the average so a die that reaches the table still stops dead
- * there.
+ * The 0.79 against another die is the one that has to stay high. A die on the
+ * floor is pinned there by a gravity twenty times the real one and cannot roll
+ * without lifting its own centre of mass against it, so bouncing the two apart
+ * hard enough to get the struck one off the floor for a moment is what gives
+ * it room to turn at all. It is set to what the old averaging rule happened to
+ * arrive at: taking it back down to the 0.71 this file briefly ran at costs a
+ * sixth of the hits that end on a new face.
  */
-export const DIE_RESTITUTION = 0.8
+export const DIE_RESTITUTION = 0.89
 
 // Air does almost nothing to a die over a flight this short, and a die still
 // moving in the bowl should be slowed by what it is touching, not by the air
@@ -305,6 +305,45 @@ export const RESOLUTION_BEAT = 1.5 // Seconds
 const DIE_METRIC_SIZE = 0.05 // Metres
 export const GRAVITY = -9.81 / DIE_METRIC_SIZE
 
+/**
+ * How many world units make a metre — the same statement of scale GRAVITY is
+ * derived from, handed to Rapier so that it can size its own tolerances by it.
+ *
+ * What it is worth is narrower than it looks, which is worth stating because
+ * the tolerances it scales sound like they should matter and do not. Raising
+ * how far two bodies may overlap before Rapier corrects them changes nothing
+ * measurable: a settled die sits within a quarter of a percent of its own
+ * width of the floor either way. Nor does the sleep threshold, which it also
+ * scales — dice here stop dead rather than creep, and no die in the bowl comes
+ * to rest anywhere it would not have without it. Sleeping itself is not spare,
+ * though: it is the engine's own answer to whether a throw is over, and the
+ * only thing Dice.isSettled asks.
+ *
+ * The one it does move is the distance at which a contact is predicted rather
+ * than found by overlap, and that one has to be taken straight back off it.
+ * See CONTACT_PREDICTION_DISTANCE.
+ */
+export const LENGTH_UNIT = 1 / DIE_METRIC_SIZE
+
+/**
+ * How far apart two surfaces may still be and be given a contact to solve.
+ *
+ * Rapier states this in metres and multiplies it by LENGTH_UNIT, which at its
+ * own default lands it at two fifths of a die width — far enough that dice
+ * sitting in the bowl are being solved against each other before they touch,
+ * and a thrown die arrives into a set of contacts that have already bled its
+ * impact away. That is what a bowl of dead dice was: an arriving die still
+ * shoved whatever it landed on, but a quarter of the hits that should have
+ * turned a die over no longer did.
+ *
+ * Twice Rapier's own default rather than the default itself. The larger
+ * distance is genuinely worth something to the die in flight, which crosses
+ * most of its own width in a step and would otherwise meet the bowl out of an
+ * overlap it should never have been in. It stops being worth it long before
+ * two fifths.
+ */
+export const CONTACT_PREDICTION_DISTANCE = 0.04
+
 export const PHYSICS_TIMESTEP = 1 / 120 // Half a render frame; a small fast body needs it
 export const PHYSICS_MAX_STEPS_PER_FRAME = 8 // Cap, so a stalled tab cannot spiral on catch-up
 
@@ -319,36 +358,64 @@ export const PHYSICS_MAX_STEPS_PER_FRAME = 8 // Cap, so a stalled tab cannot spi
 export const MAX_FRAME_TIME = PHYSICS_TIMESTEP * PHYSICS_MAX_STEPS_PER_FRAME
 
 /**
- * Set to the same figure as DIE_FRICTION, so a die grips the bowl exactly as
- * well as it grips another die.
+ * A die grips the bowl at 0.55, nearly twice what it grips another die with.
  *
- * Higher than lacquer over hard wood would really give, and deliberately: the
- * drag under a die's own base is the only thing with any torque to tip it over,
- * so a slippery floor turns every hit into a skate. Taking this down to a third
- * of DIE_FRICTION, which is about honest for the material, leaves a struck die
- * sliding a couple of die widths and stopping on the face it started on.
+ * This is the number that decides whether a struck die rolls or skates, and it
+ * is the only thing in the scene with any torque to tip one over: the floor
+ * holds the bottom of a die while the top keeps going, and the die goes over
+ * its leading edge. Taken down to the 0.30 the dice use between themselves, a
+ * square hit still shoves the struck die — it moves about a sixth of its own
+ * width — but it slides rather than turns, and only a third as many hits end
+ * on a new face.
+ *
+ * Stated as 1.0 because the multiplying rule leaves nowhere else to put it.
+ * The pairing is this times DIE_FRICTION, so a floor meant to grip harder than
+ * a die does can only say so by giving up its own figure entirely, and this is
+ * the one place the rule's honesty runs out. Higher than lacquer over hard
+ * wood would really give, as it has always been, and for the same reason.
  */
-export const BOWL_FRICTION = 0.45
+export const BOWL_FRICTION = 1.0
 
 /**
- * Low so that it can be. Rapier averages the two materials in a contact, and
- * DIE_RESTITUTION is set high for the sake of dice hitting each other, so the
- * bowl's own figure is whatever holds their average at the 0.45 the throw is
- * tuned around — about a fifth of the energy returned per bounce. Much below
- * that average a die arrives, thuds once and is finished; much above it the
- * first bounce clears the rim and the bowl stops being able to hold anything.
+ * Lacquer over hard wood, giving 0.30 against a die — restitution is a ratio
+ * of speeds rather than of energies, so that is about a tenth of the energy
+ * returned per bounce, and it is the figure the throw is tuned around.
+ *
+ * It is the number the arriving die is most visibly judged by, because it sets
+ * how high the first bounce goes. Much above this and a die lands, rises past
+ * its own height and comes down somewhere unrelated to where it was aimed;
+ * much below it and a die arrives, thuds once and is finished. At 0.30 the
+ * first bounce lifts it about four tenths of its own width, which is enough to
+ * see and not enough to lose the throw in.
+ *
+ * The pairing is what is fixed here, not this: it is whatever holds the
+ * product with DIE_RESTITUTION at 0.30, and it moves whenever that does.
  */
-export const BOWL_RESTITUTION = 0.1
-
-export const FELT_FRICTION = 0.6 // Cloth, and the grippiest surface in the scene
+export const BOWL_RESTITUTION = 0.34
 
 /**
- * A die that reaches the table is meant to stop there. Taken as the minimum of
- * the two materials rather than the average, so this is what a die meets the
- * felt with whatever DIE_RESTITUTION happens to be — see the felt's collider in
- * PhysicsWorld.
+ * Cloth. Multiplied by the die's own 0.55 rather than averaged with it, which
+ * is what puts a die on the felt at the 0.52 it has always slid to a stop
+ * against.
+ *
+ * No longer the grippiest pairing in the scene — the bowl's floor passed it
+ * when it took over the work of turning a struck die — but it does not have to
+ * be. All it has to do is stop a die that has left the bowl, and against the
+ * 0.30 the dice grip each other with there is no danger of one skating away.
  */
-export const FELT_RESTITUTION = 0.08
+export const FELT_FRICTION = 0.95
+
+/**
+ * A die that reaches the table is meant to stop there, and 0.07 against a die
+ * is what stops it. Like the bowl's, this is whatever holds that product where
+ * it belongs rather than a figure the felt states about itself.
+ *
+ * It needs no special case now, unlike under the old averaging rule: averaged
+ * with a die's own figure this came out at 0.44, and the felt had to ask for
+ * the smaller of the two materials instead to keep a spilled die from hopping
+ * away across the table.
+ */
+export const FELT_RESTITUTION = 0.075
 
 /**
  * How thick the table's collider is. It is solid rather than a sensor: a die
@@ -371,7 +438,7 @@ export const THROW_MIN_DRAG = 1.2 // Dead zone: a bare click throws nothing at a
  * camera's own ray rather than straight up, so the line comes out a little
  * steeper than this. Nor the angle the die arrives at: the flight is lifted
  * off the line by the gravity it has to give back, so it comes down steeper
- * again — about 73° at the shortest throw and 53° at the longest.
+ * again — about 79° at the shortest throw and 56° at the longest.
  *
  * Fixing the angle rather than the height is what keeps the line's length
  * proportional to the drag across the table. A fixed height would make a short
@@ -424,10 +491,19 @@ export const THROW_LAUNCH_CAMERA_MARGIN = 2
  * proportional to the line's length — a longer line is a harder throw, not a
  * slower one — and it is also what bounds how far the flight strays from the
  * straight line the preview draws. That gap is gravity times the square of
- * this, over eight: about six tenths of a die at this value. Raise it for a
- * slower, visibly curved throw; lower it for a flatter, faster one.
+ * this, over eight: about one and a fifth die widths at this value. Raise it
+ * for a slower, visibly curved throw; lower it for a flatter, faster one.
+ *
+ * It is longer than it looks like it should be, and that is the point. The
+ * same line thrown over a longer flight is thrown more slowly, and the speed
+ * the die arrives at is what decides whether it lands or merely rebounds: at
+ * 0.16 a throw came in hard enough that the bounce was larger than anything
+ * left of the throw's own direction, and where the die ended up had more to do
+ * with which corner it landed on than with where it was aimed. The die still
+ * lands exactly where the line ends — that is what the solve guarantees — but
+ * it now arrives slowly enough to stay there.
  */
-export const THROW_FLIGHT_TIME = 0.16 // Seconds
+export const THROW_FLIGHT_TIME = 0.22 // Seconds
 
 /**
  * How far from the bowl's axis either end of the line may reach. Kept inside

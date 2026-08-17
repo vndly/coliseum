@@ -1,4 +1,4 @@
-import {ColliderDesc, RigidBodyDesc} from '@dimforge/rapier3d-compat'
+import {CoefficientCombineRule, ColliderDesc, RigidBodyDesc} from '@dimforge/rapier3d-compat'
 import type {ColliderHandle, RigidBody, World} from '@dimforge/rapier3d-compat'
 import {Quaternion, Vector3} from 'three'
 import type {Material, Mesh, Object3D} from 'three'
@@ -31,9 +31,12 @@ const AT_REST = new Vector3(0, 0, 0) // Shared, and only ever read
  * the bowl already looks like.
  *
  * Continuous collision detection is on. A die is roughly a unit across and the
- * longest throw leaves the hand at about 145 units a second, which is more
- * than its own width per step — far enough to pass clean through the bowl's
- * wall, which is thinner than that.
+ * longest throw leaves the hand at about 100 units a second, which is most of
+ * its own width per step — and the bowl is a revolved shell with no thickness
+ * at all, so a step that crosses it is a step straight through it. It costs
+ * nothing measurable here: the same throws land in the same places with it
+ * turned off, which is the point. It is there for the throw that would
+ * otherwise be the one that leaves.
  */
 export class Die {
   private readonly identifier: string // Agreed with every other player
@@ -86,7 +89,12 @@ export class Die {
           new Quaternion(), // The inertia's own frame, square to the die
         )
         .setFriction(DIE_FRICTION)
-        .setRestitution(DIE_RESTITUTION),
+        .setRestitution(DIE_RESTITUTION)
+
+        // Multiplied with whatever the die meets rather than averaged with it,
+        // as every collider in this world is. See PhysicsWorld.
+        .setFrictionCombineRule(CoefficientCombineRule.Multiply)
+        .setRestitutionCombineRule(CoefficientCombineRule.Multiply),
       this.body,
     ).handle
 
