@@ -19,6 +19,7 @@ const NAME_KEY = 'coliseum.player-name' // Where the last name played under is k
 const route = useRoute()
 const router = useRouter()
 
+const nameField = useTemplateRef<HTMLInputElement>('nameField')
 const codeField = useTemplateRef<HTMLInputElement>('codeField')
 
 const mode = ref<'create' | 'join'>('create')
@@ -91,9 +92,30 @@ function describe(reason: unknown): string {
   return reason instanceof Error ? reason.message : 'Something went wrong. Try again.'
 }
 
+/**
+ * Puts the caret on whichever half of a seat is still missing.
+ *
+ * A name is remembered between matches, so a player who has one already is here
+ * for the code alone and lands on it. The wait is for the field to exist at all:
+ * it is only in the page while the join form is.
+ */
+async function focusJoinForm(): Promise<void> {
+  await nextTick()
+
+  if (trimmedName.value === '') {
+    nameField.value?.focus()
+  } else {
+    codeField.value?.focus()
+  }
+}
+
 function chooseMode(next: 'create' | 'join'): void {
   mode.value = next
   error.value = ''
+
+  if (next === 'join') {
+    void focusJoinForm()
+  }
 }
 
 async function runCreate(): Promise<void> {
@@ -248,6 +270,7 @@ function onPaste(): void {
         <label class="field">
           <span class="field__label">Your name</span>
           <input
+            ref="nameField"
             v-model="playerName"
             class="field__input"
             type="text"
