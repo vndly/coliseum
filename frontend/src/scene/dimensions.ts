@@ -551,3 +551,31 @@ export const AIM_DOT_OPACITY = 0.75
  * the length of the line and so the speed of the throw.
  */
 export const AIM_DOT_END_SCALE = 0.35
+
+/**
+ * How solid the die at the launch end of the line is.
+ *
+ * Lower than the dots, which are small enough on screen to be read at any
+ * weight. This is a whole die's worth of surface, and carried much past this
+ * it stops reading as a die about to be thrown and starts reading as one
+ * already on the table.
+ */
+export const AIM_DIE_OPACITY = 0.4
+
+/**
+ * How the die at the launch end is turned.
+ *
+ * Square to the world it would be a square seen from straight overhead, which
+ * is where the camera opens. Turned off all three axes instead, so three of
+ * its faces are in view from anywhere the camera can be orbited to and the
+ * thing at the end of the line is unmistakably a die.
+ *
+ * Fixed rather than the attitude the throw will actually leave with: that one
+ * is not drawn until the gesture is released, and a die tumbling under the
+ * pointer would be movement in the one place the aim is meant to be still.
+ */
+export const AIM_DIE_TILT = {
+  x: Math.PI / 7, // 26°
+  y: Math.PI / 5, // 36°
+  z: Math.PI / 9, // 20°
+}
