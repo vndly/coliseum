@@ -1088,11 +1088,11 @@ onBeforeUnmount(() => {
 }
 
 /* The only press the table itself asks for, and the one a player reaches for
-   without looking away from the bowl. Sized for that thumb rather than for the
-   line of type on it. */
+   without looking away from the bowl. Sized for that thumb, and set large
+   enough to be read at the edge of an eye held on the dice. */
 .action--large {
     padding: 1rem 3rem;
-    font-size: 1.125rem;
+    font-size: 1.5rem;
 }
 
 /* ============================================
