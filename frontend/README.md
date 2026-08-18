@@ -8,8 +8,8 @@
 
 ## TODO
 
+- Transparent die at the end of the dotted patha
 - Show a message when the turn of a player starts
-- Transparent die at the end of the dotted path
 - Allow to throw die with one click
 - Choose who starts randomly
 
