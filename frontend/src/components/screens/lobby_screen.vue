@@ -1,10 +1,10 @@
 <!-- The way into a match: start one, or take a seat in one that exists.
 
-     A code is enough on its own. Typing one and pressing the button takes the
-     seat, and the match's own screen is where the seats filling up is watched —
-     the lobby never shows a match it is about to join. -->
+     A code is enough on its own. Typing one takes the seat as its last
+     character lands, and the match's own screen is where the seats filling up is
+     watched — the lobby never shows a match it is about to join. -->
 <script setup lang="ts">
-import {computed, nextTick, onMounted, ref, useTemplateRef} from 'vue'
+import {computed, nextTick, onMounted, ref, useTemplateRef, watch} from 'vue'
 import {useRoute, useRouter} from 'vue-router'
 import DieFace from '@/components/die_face.vue'
 import {isMatchCode, normaliseMatchCode} from '@/match/codes'
@@ -86,6 +86,20 @@ onMounted(() => {
     code.value = carried
     mode.value = 'join'
   }
+
+  // A code is four characters and no more, so the character that completes one
+  // says everything pressing the button would, and the seat is taken on it. The
+  // button stays for the codes this does not speak for: one finished before the
+  // name was, one already turned down once, and the one carried in above.
+  //
+  // Watched from here rather than from the setup above, so that the code
+  // carried in is not taken for a code the player typed. A field that filled
+  // itself is not somebody saying they are ready to go.
+  watch(code, () => {
+    if (canJoin.value) {
+      void runJoin()
+    }
+  })
 })
 
 function describe(reason: unknown): string {
@@ -160,6 +174,11 @@ async function runJoin(): Promise<void> {
   } catch (reason: unknown) {
     error.value = describe(reason)
     busy.value = false
+
+    // The code is the only thing here that can be wrong, and a join that began
+    // on its last character took the caret out of it. It goes back.
+    await nextTick()
+    codeField.value?.focus()
   }
 }
 
@@ -218,9 +237,14 @@ async function runPaste(): Promise<void> {
   code.value = pasted
 
   // The button is gone the moment the field has a code in it, so the caret goes
-  // into the field rather than the focus onto nothing
+  // into the field rather than the focus onto nothing — unless the code was
+  // whole enough to be taken on the spot, and the field is already shut behind
+  // the join it started
   await nextTick()
-  codeField.value?.focus()
+
+  if (!busy.value) {
+    codeField.value?.focus()
+  }
 }
 
 function onCreate(): void {

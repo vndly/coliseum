@@ -4,10 +4,10 @@
 
 - Check the initial die is never a 6
 - Cancel throw: ESC or right click
+- Auto focus code input
 
 ## TODO
 
-- Auto focus code input
 - Show a message when the turn of a player starts
 - Transparent die at the end of the dotted path
 - Allow to throw die with one click
