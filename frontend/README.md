@@ -6,10 +6,10 @@
 - Cancel throw: ESC or right click
 - Auto focus code input
 - Transparent die at the end of the dotted path
+- Show a message when the turn of a player starts
 
 ## TODO
 
-- Show a message when the turn of a player starts
 - Allow to throw die with one click
 - Choose who starts randomly
 

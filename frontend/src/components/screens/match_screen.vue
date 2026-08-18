@@ -35,6 +35,9 @@ const COPIED_MILLISECONDS = 2000 // How long the copy button holds its answer
  */
 const TAKEOVER_MILLISECONDS = 5000
 
+/** How long a turn is called for before the call fades and the table is let go. */
+const TURN_CALL_MILLISECONDS = 1500
+
 // None of these are refs: the scene mutates every frame and must stay out of
 // reactivity, and the client and the counters are only ever read from callbacks
 // that already know when they changed
@@ -46,12 +49,15 @@ let awaitingSeq = 0 // Somebody else's throw that has stopped and not yet been j
 let takeoverTimer = 0 // The pending offer to judge it for them, so it can be called off
 let appliedBowlVersion = -1 // The last bowl handed to the scene; -1 so the opening one lands
 let copiedTimer = 0 // The pending reset of the copy button, so it can be called off
+let turnCallTimer = 0 // The pending end of the turn call, so it can be called off
 let leaveAllowed = false // Set by every departure made here, so the guard lets those through
 
 const state = shallowRef<MatchState | null>(null)
 const uid = ref('')
 const busy = ref(false) // A throw made here is still in the air
 const resolving = ref(false) // A verdict is being played out, here and on every other table
+const calledTurn = ref(-1) // The seat the call names, once a turn has been called
+const calling = ref(false) // Whether that call is up, and the table held for it
 const acknowledgedLoss = ref(false) // Whether this player has closed the notice that they are out
 const acknowledgedEnd = ref(false) // Whether this player has closed the notice naming the winner
 const showLeave = ref(false) // Whether the question about leaving the match is up
@@ -106,16 +112,53 @@ const handToThrow = computed<number>(() => {
   return match === null || uid.value === '' ? 1 : throwSize(match, uid.value)
 })
 
+/**
+ * Whose turn it is, once there is nothing left to watch.
+ *
+ * A turn is called as it begins, and -1 is every moment that is not the
+ * beginning of one: before the first deal, after the match is over, and for as
+ * long as the scene is still playing out the verdict that moved the turn on.
+ * That last one is why this waits rather than reading the turn straight off the
+ * match — a call made there would stand over the dice leaving the bowl, which
+ * is the part of a throw worth watching.
+ */
+const settledTurn = computed<number>(() => {
+  const match = state.value
+
+  return match === null || !playing.value || resolving.value ? -1 : match.turnIndex
+})
+
+/** The player the call on screen names, for as long as it is up. */
+const calledPlayer = computed<MatchPlayer | null>(
+  () => state.value?.players[calledTurn.value] ?? null,
+)
+
+/** What the call says: the second person to the player it is asking something of. */
+const callLine = computed<string>(() => {
+  const player = calledPlayer.value
+
+  if (player === null) {
+    return ''
+  }
+
+  return player.uid === uid.value ? 'Your turn' : `${player.name}'s turn`
+})
+
 // Both close over the whole of a throw, not just its flight. The dice stopping
 // is not the end of it: the verdict is still being written, and a gesture or a
 // pass landing in that gap would be judged against a bowl the match has not
 // finished with — or would move the turn out from under the verdict on its way
 // to the thrower's own hand.
+//
+// Closed again for as long as a turn is being called. The layer that carries
+// the call is already holding every pointer on the screen; this is what stops
+// the one press that layer cannot — a Pass the keyboard still has hold of.
 const canThrow = computed<boolean>(
   () => playing.value
     && isMyTurn.value
     && !busy.value
     && !resolving.value
+    && !calling.value
     && judged.value
     && !bowlFull.value
     && myPool.value > 0,
@@ -126,6 +169,7 @@ const canPass = computed<boolean>(
     && isMyTurn.value
     && !busy.value
     && !resolving.value
+    && !calling.value
     && judged.value
     && state.value?.hasThrown === true,
 )
@@ -194,6 +238,23 @@ watch(handToThrow, (count) => {
   if (scene !== null) {
     scene.throwCount = count
   }
+})
+
+// A turn is called once, as it begins. Watched rather than written into the
+// verdict, because a turn also begins on a pass, on the first deal, and on a
+// player opening a match that is already part way through one.
+watch(settledTurn, (seat) => {
+  if (seat === -1 || seat === calledTurn.value) {
+    return
+  }
+
+  calledTurn.value = seat
+  calling.value = true
+
+  window.clearTimeout(turnCallTimer)
+  turnCallTimer = window.setTimeout(() => {
+    calling.value = false
+  }, TURN_CALL_MILLISECONDS)
 })
 
 function describe(reason: unknown): string {
@@ -528,6 +589,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.clearTimeout(copiedTimer)
   window.clearTimeout(takeoverTimer)
+  window.clearTimeout(turnCallTimer)
   client?.dispose()
   client = null
   scene?.dispose()
@@ -649,6 +711,26 @@ onBeforeUnmount(() => {
         </button>
       </footer>
     </div>
+
+    <!-- Whose turn it is is the one thing the table cannot say for itself: the
+         rail lights the new seat, but a player watching the bowl never sees it
+         happen. Called in the middle of the screen, over the bowl, and answered
+         by nobody — it holds the table for a beat and then lets it go.
+
+         Under the cards below rather than over them, so that a question already
+         being asked keeps both the screen and the presses that answer it.
+
+         The right button orbits the camera, and this layer stands in front of
+         the canvas that keeps the browser's menu on that button out of the way,
+         so it has to keep it out of the way itself. -->
+    <Transition name="call">
+      <div v-if="calling" class="call" role="status" @contextmenu.prevent>
+        <DieFace :value="calledTurn + 1" lit />
+        <p class="call__line" :class="{'call__line--mine': calledPlayer?.uid === uid}">
+          {{ callLine }}
+        </p>
+      </div>
+    </Transition>
 
     <!-- Both notices leave the bowl visible behind them. One says to keep
          watching and the other is shown over the bowl everybody wants to see,
@@ -1004,6 +1086,83 @@ onBeforeUnmount(() => {
 
 .action--quiet:hover {
     color: var(--bone);
+}
+
+/* ============================================
+   The turn being called
+   ============================================ */
+
+/* The one layer here that keeps every pointer it is given rather than passing
+   it down to the canvas. A call cannot be answered, so while one is up the
+   table is held: no gesture, no orbit, no button.
+
+   Lit rather than curtained off. A flat scrim would take the bowl away for the
+   whole of the call, and the bowl is what the player has just been told to look
+   at; this is the lamp the scene is already lit by, turned up over the middle
+   of the table for as long as there is something to read there. */
+.call {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding: 1.25rem;
+    background: radial-gradient(
+        circle 24rem at center,
+        rgb(14 18 16 / 82%) 0%,
+        rgb(14 18 16 / 58%) 40%,
+        rgb(14 18 16 / 0%) 100%
+    );
+
+    /* Holding the pointer is not enough on touch: the two fingers that orbit
+       the camera are also the browser's own zoom, and a layer that only stopped
+       them reaching the canvas would hand them to the page instead — leaving
+       the table zoomed long after the call has gone. The canvas gives this up
+       for the same reason. */
+    touch-action: none;
+}
+
+/* The same seat the rail lights, at the size the interface draws a die at when
+   the die is the thing being shown rather than a mark beside a name. Which pill
+   up there is whose is learnt here, on the one screen where the two are said
+   together. */
+.call .die-face {
+    --size: 2.25rem;
+}
+
+.call__line {
+    font-size: 1.75rem;
+    font-weight: 600;
+    line-height: 1.1;
+    color: var(--bone);
+}
+
+/* Brass is what this interface says "yours" in — the hand being counted, the
+   button worth pressing — so the one call that asks for something is set in it */
+.call__line--mine {
+    color: var(--brass);
+}
+
+/* Both ends are transitions off a class rather than an animation ending at
+   nothing, so that the reduced-motion rule crushing them to an instant leaves
+   the call on screen for its length instead of leaving it invisible for it */
+.call-enter-active {
+    transition: opacity 260ms ease-out;
+}
+
+.call-leave-active {
+    transition: opacity 400ms ease-in;
+
+    /* The table is let go the moment the call starts to leave, so that the last
+       of the fade is not felt as a refused drag */
+    pointer-events: none;
+}
+
+.call-enter-from,
+.call-leave-to {
+    opacity: 0;
 }
 
 /* ============================================
