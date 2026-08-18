@@ -693,7 +693,7 @@ onBeforeUnmount(() => {
         <button
           v-if="canPass"
           type="button"
-          class="action"
+          class="action action--large"
           @click="onPass"
         >
           Pass
@@ -725,7 +725,6 @@ onBeforeUnmount(() => {
          so it has to keep it out of the way itself. -->
     <Transition name="call">
       <div v-if="calling" class="call" role="status" @contextmenu.prevent>
-        <DieFace :value="calledTurn + 1" lit />
         <p class="call__line" :class="{'call__line--mine': calledPlayer?.uid === uid}">
           {{ callLine }}
         </p>
@@ -1088,6 +1087,14 @@ onBeforeUnmount(() => {
     color: var(--bone);
 }
 
+/* The only press the table itself asks for, and the one a player reaches for
+   without looking away from the bowl. Sized for that thumb rather than for the
+   line of type on it. */
+.action--large {
+    padding: 1rem 3rem;
+    font-size: 1.125rem;
+}
+
 /* ============================================
    The turn being called
    ============================================ */
@@ -1104,10 +1111,8 @@ onBeforeUnmount(() => {
     position: absolute;
     inset: 0;
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
     justify-content: center;
-    gap: 1rem;
     padding: 1.25rem;
     background: radial-gradient(
         circle 24rem at center,
@@ -1124,18 +1129,14 @@ onBeforeUnmount(() => {
     touch-action: none;
 }
 
-/* The same seat the rail lights, at the size the interface draws a die at when
-   the die is the thing being shown rather than a mark beside a name. Which pill
-   up there is whose is learnt here, on the one screen where the two are said
-   together. */
-.call .die-face {
-    --size: 2.25rem;
-}
-
+/* The whole of the call, so it is set at the size of a thing said across a room
+   rather than a line of interface. Held off the longest name the rail can carry
+   by the viewport term, which brings it down before it can reach the edges. */
 .call__line {
-    font-size: 1.75rem;
+    font-size: clamp(2rem, 9vw, 3.25rem);
     font-weight: 600;
     line-height: 1.1;
+    text-align: center;
     color: var(--bone);
 }
 
