@@ -1,8 +1,9 @@
 # Frontend
 
+- Check the initial die is never a 6
+
 ## TODO
 
-- Check the initial die is never a 6
 - Choose who starts randomly
 - Show a message when the turn of a player starts
 - Cancel throw: ESC or right click

@@ -1,4 +1,4 @@
-import {Euler, Quaternion, Vector3} from 'three'
+import {Quaternion, Vector3} from 'three'
 import {BOWL_INTERIOR_FLOOR_HEIGHT,
   BOWL_INTERIOR_FLOOR_RADIUS,
   DIE_SIZE,
@@ -34,6 +34,9 @@ export const DIE_FACE_NORMALS: Vector3[] = [
   new Vector3(-1, 0, 0),
   new Vector3(0, 0, -1),
 ]
+
+/** Straight up: the direction a resting die's showing face points. */
+const UP = new Vector3(0, 1, 0)
 
 /** A die at rest, as it is held in the match's authoritative bowl. */
 export interface DieSnapshot {
@@ -124,6 +127,12 @@ export function readDieFace(rotation: [number, number, number, number]): number 
  * that one face is genuinely upwards. A fully random attitude would be one no
  * die can actually rest in, and the first thing the physics would do is drop it
  * onto a face — which is the same result, arrived at with a visible lurch.
+ *
+ * Never a six. A six in the bowl is a die on its way out of the match, so the
+ * first throw to settle would judge this one along with its own and carry it
+ * off — a die gone before anybody could pair it. Which is why the value showing
+ * is drawn first, from the five that stay, and the attitude is built to put it
+ * upwards rather than drawn and then inspected.
  * @returns The opening die, ready to be written into a new match
  */
 export function createOpeningDie(): DieSnapshot {
@@ -136,14 +145,18 @@ export function createOpeningDie(): DieSnapshot {
   // A bare random radius crowds the middle, where a bowl already gathers dice.
   const radius = Math.sqrt(Math.random()) * reach
 
-  // Three random quarter turns. That is more combinations than a cube has
-  // distinct attitudes, so some are drawn twice as often as others, and it does
-  // not matter: every one of them is a face-up rest, which is all this promises.
-  const rotation = new Quaternion().setFromEuler(new Euler(
-    Math.floor(Math.random() * 4) * Math.PI / 2,
-    Math.floor(Math.random() * 4) * Math.PI / 2,
-    Math.floor(Math.random() * 4) * Math.PI / 2,
-  ))
+  // One of the five values that stay in the match, each as likely as the rest.
+  // Three is the face already pointing upwards, so it is what the miss falls
+  // back to — a rest like any other, rather than an attitude nothing chose.
+  const showing = 1 + Math.floor(Math.random() * 5)
+  const normal = DIE_FACE_NORMALS[showing - 1] ?? UP
+
+  // The turn that lifts that face upwards, and then a quarter turn about the
+  // vertical for which way round the die is sitting. Both leave it square to
+  // the axes, so what comes out is still an attitude a die can rest in.
+  const rotation = new Quaternion()
+    .setFromAxisAngle(UP, Math.floor(Math.random() * 4) * Math.PI / 2)
+    .multiply(new Quaternion().setFromUnitVectors(normal, UP))
 
   const attitude: [number, number, number, number] = [
     rotation.x,
