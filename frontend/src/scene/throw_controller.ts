@@ -16,6 +16,11 @@ import {AIM_DOT_COUNT,
   THROW_MAX_RADIUS,
   THROW_MIN_DRAG} from '@/scene/dimensions'
 
+// The whole of PointerEvent.buttons while a throw is being aimed: the left
+// mouse button, a finger in contact, or a pen tip. Anything else in the mask
+// is a second button that has joined the first.
+const PRIMARY_BUTTON_ONLY = 1
+
 /**
  * Turns a drag across the canvas into a thrown die.
  *
@@ -46,9 +51,18 @@ import {AIM_DOT_COUNT,
  * attitude and the tumble, which are drawn here rather than where the die is
  * built precisely so that every player builds the same one.
  *
+ * An aim can be abandoned as well as finished, and the ways out are the ones
+ * the hand already on the controls can reach: another mouse button, a second
+ * finger, or Escape. The first two are the camera's own gestures and take the
+ * aim with them on their way past; Escape asks for nothing else, and is all a
+ * keyboard has. Each of them leaves the pointer where it is — the throw is
+ * begun again by pressing afresh, which is what the release no longer does.
+ *
  * Listeners are bound to the canvas here rather than in the component, in the
- * same way the orbit controls bind their own. Vue owns the element and this
- * object's lifetime, and nothing more.
+ * same way the orbit controls bind their own. Escape is the exception and goes
+ * on the window, because a canvas takes no focus of its own and so is never
+ * where a key press arrives. Vue owns the element and this object's lifetime,
+ * and nothing more.
  */
 export class ThrowController {
   private readonly canvas: HTMLCanvasElement
@@ -89,6 +103,7 @@ export class ThrowController {
     canvas.addEventListener('pointermove', this.onPointerMove)
     canvas.addEventListener('pointerup', this.onPointerUp)
     canvas.addEventListener('pointercancel', this.onPointerCancel)
+    window.addEventListener('keydown', this.onKeyDown)
   }
 
   /**
@@ -123,6 +138,7 @@ export class ThrowController {
     this.canvas.removeEventListener('pointermove', this.onPointerMove)
     this.canvas.removeEventListener('pointerup', this.onPointerUp)
     this.canvas.removeEventListener('pointercancel', this.onPointerCancel)
+    window.removeEventListener('keydown', this.onKeyDown)
   }
 
   /**
@@ -146,8 +162,9 @@ export class ThrowController {
 
     this.downPointers.add(event.pointerId)
 
-    // Any other button is the camera's: the right one orbits, and an aim in
-    // progress has just been overtaken by it.
+    // A gesture begun on any other button is the camera's — the right one
+    // orbits. This is not what catches the button pressed part way through an
+    // aim, which never arrives as a press at all; onPointerMove has that one.
     if (event.button !== 0) {
       this.cancel()
 
@@ -186,6 +203,18 @@ export class ThrowController {
       return
     }
 
+    // A button pressed while the first is still held does not arrive as a
+    // press. A pointer already in the active buttons state reports every later
+    // button change as a move instead, which is why the branch in onPointerDown
+    // never sees the right-click that abandons a drag. What is read here is the
+    // state rather than the change, so it holds whichever of the two events the
+    // browser chooses to send it in.
+    if (event.buttons !== PRIMARY_BUTTON_ONLY) {
+      this.cancel()
+
+      return
+    }
+
     if (!this.projectToTable(event, this.launchGround)) {
       return
     }
@@ -218,6 +247,21 @@ export class ThrowController {
     if (event.pointerId === this.activePointer) {
       this.cancel()
     }
+  }
+
+  /**
+   * Abandons the aim on Escape. Bound as a field so it can be added and
+   * removed as a listener without losing its receiver.
+   *
+   * The press is left to the page rather than swallowed: it is only ever a
+   * cancel, and a key that means something else elsewhere goes on meaning it.
+   */
+  private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key !== 'Escape' || this.activePointer === null) {
+      return
+    }
+
+    this.cancel()
   }
 
   /**

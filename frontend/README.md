@@ -1,12 +1,15 @@
 # Frontend
 
+## DONE
+
 - Check the initial die is never a 6
+- Cancel throw: ESC or right click
 
 ## TODO
 
+- Auto focus code input
 - Choose who starts randomly
 - Show a message when the turn of a player starts
-- Cancel throw: ESC or right click
 - Allow to throw die with one click
 - Transparent die at the end of the dotted path
 - Configure how many dice per player
