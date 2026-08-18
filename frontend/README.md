@@ -8,10 +8,13 @@
 ## TODO
 
 - Auto focus code input
-- Choose who starts randomly
 - Show a message when the turn of a player starts
-- Allow to throw die with one click
 - Transparent die at the end of the dotted path
+- Allow to throw die with one click
+- Choose who starts randomly
+
+# LATER
+
 - Configure how many dice per player
 - Configure die color
 - Tournament
