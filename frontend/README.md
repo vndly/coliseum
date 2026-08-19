@@ -1,15 +1,9 @@
 # Frontend
 
-## DONE
-
-- Check the initial die is never a 6
-- Cancel throw: ESC or right click
-- Auto focus code input
-- Transparent die at the end of the dotted path
-- Show a message when the turn of a player starts
-
 ## TODO
 
+- Move name input outside of the form
+- Add firestore listner to show open matches
 - Allow to throw die with one click
 - Choose who starts randomly
 
@@ -18,5 +12,13 @@
 - Configure how many dice per player
 - Configure die color
 - Tournament
-  - 1 point per win
-  - X points per win (sum of dice / sum of points)
+  - Points
+    - 1 point per win
+    - 1 point per dice left
+  - Target
+    - Choose best of X
+    - First one to get X points
+- Dice skins
+- Add hole in the bowl where dice can fall off
+- New rules
+  - Flush: if you get 1, 2, 3, 4 and 5 you collect all dice
