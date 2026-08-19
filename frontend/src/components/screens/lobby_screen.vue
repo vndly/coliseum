@@ -1,4 +1,6 @@
-<!-- The way into a match: start one, or take a seat in one that exists.
+<!-- The way into a match: say who you are, then start one or take a seat in one
+     that exists. Two cards, because the name is asked once and the choice under
+     it is only ever between the two ways in.
 
      A code is enough on its own. Typing one takes the seat as its last
      character lands, and the match's own screen is where the seats filling up is
@@ -266,31 +268,13 @@ function onPaste(): void {
       <h1 class="lobby__wordmark">Coliseum</h1>
     </header>
 
-    <section class="card">
-      <div class="switch" role="group" aria-label="Start or join">
-        <button
-          type="button"
-          class="switch__option"
-          :class="{'switch__option--on': mode === 'create'}"
-          :aria-pressed="mode === 'create'"
-          :disabled="busy"
-          @click="chooseMode('create')"
-        >
-          New match
-        </button>
-        <button
-          type="button"
-          class="switch__option"
-          :class="{'switch__option--on': mode === 'join'}"
-          :aria-pressed="mode === 'join'"
-          :disabled="busy"
-          @click="chooseMode('join')"
-        >
-          Join a match
-        </button>
-      </div>
-
-      <form class="form" @submit.prevent>
+    <div class="lobby__cards">
+      <!-- Out on its own, above the switch rather than under it. A name is
+           asked once and stands for both ways in, so inside the form it read as
+           part of whichever half was showing. The form attribute keeps it a
+           field of that form across the gap all the same, so Enter here still
+           presses whatever the card below is offering. -->
+      <section class="card">
         <label class="field">
           <span class="field__label">Your name</span>
           <input
@@ -298,96 +282,124 @@ function onPaste(): void {
             v-model="playerName"
             class="field__input"
             type="text"
+            form="lobby-form"
             :maxlength="NAME_LIMIT"
             :disabled="busy"
             autocomplete="nickname"
           >
         </label>
+      </section>
 
-        <template v-if="mode === 'create'">
-          <!-- A group rather than a fieldset: a legend is taken out of its
-               parent's flex flow, and lands on top of the dice -->
-          <div class="field" role="group" aria-label="Players">
-            <span class="field__label" aria-hidden="true">Players</span>
-            <div class="counts">
-              <button
-                v-for="count in seatCounts"
-                :key="count"
-                type="button"
-                class="counts__option"
-                :class="{'counts__option--on': playerCount === count}"
-                :aria-pressed="playerCount === count"
-                :aria-label="`${count} players`"
-                :disabled="busy"
-                @click="playerCount = count"
-              >
-                <DieFace :value="count" :lit="playerCount === count" />
-              </button>
-            </div>
-          </div>
-
+      <section class="card">
+        <div class="switch" role="group" aria-label="Start or join">
           <button
-            type="submit"
-            class="action"
-            :class="{'action--busy': busy}"
-            :disabled="!canCreate"
-            @click="onCreate"
+            type="button"
+            class="switch__option"
+            :class="{'switch__option--on': mode === 'create'}"
+            :aria-pressed="mode === 'create'"
+            :disabled="busy"
+            @click="chooseMode('create')"
           >
-            {{ busy ? 'Creating…' : 'Create match' }}
+            Create match
           </button>
-        </template>
-
-        <template v-else>
-          <!-- Not a label wrapped round its input like the name above: a label
-               may hold one labelable element, and the paste button is a second -->
-          <div class="field">
-            <label class="field__label" for="match-code">Match code</label>
-
-            <div class="code">
-              <input
-                id="match-code"
-                ref="codeField"
-                v-model="code"
-                class="field__input field__input--code"
-                type="text"
-                :maxlength="CODE_LENGTH"
-                :disabled="busy"
-                autocapitalize="characters"
-                autocomplete="off"
-                spellcheck="false"
-                placeholder="K7QM"
-              >
-
-              <button
-                v-if="code.trim() === ''"
-                type="button"
-                class="paste"
-                aria-label="Paste the code"
-                :disabled="busy"
-                @click="onPaste"
-              >
-                <svg class="paste__icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <rect x="8" y="2" width="8" height="4" rx="1" />
-                  <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
           <button
-            type="submit"
-            class="action"
-            :class="{'action--busy': busy}"
-            :disabled="!canJoin"
-            @click="onJoin"
+            type="button"
+            class="switch__option"
+            :class="{'switch__option--on': mode === 'join'}"
+            :aria-pressed="mode === 'join'"
+            :disabled="busy"
+            @click="chooseMode('join')"
           >
-            {{ busy ? 'Joining…' : 'Join match' }}
+            Join a match
           </button>
-        </template>
+        </div>
 
-        <p v-if="error" class="error" role="alert">{{ error }}</p>
-      </form>
-    </section>
+        <form id="lobby-form" class="form" @submit.prevent>
+          <template v-if="mode === 'create'">
+            <!-- A group rather than a fieldset: a legend is taken out of its
+                 parent's flex flow, and lands on top of the dice -->
+            <div class="field" role="group" aria-label="Players">
+              <span class="field__label" aria-hidden="true">Players</span>
+              <div class="counts">
+                <button
+                  v-for="count in seatCounts"
+                  :key="count"
+                  type="button"
+                  class="counts__option"
+                  :class="{'counts__option--on': playerCount === count}"
+                  :aria-pressed="playerCount === count"
+                  :aria-label="`${count} players`"
+                  :disabled="busy"
+                  @click="playerCount = count"
+                >
+                  <DieFace :value="count" :lit="playerCount === count" />
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              class="action"
+              :class="{'action--busy': busy}"
+              :disabled="!canCreate"
+              @click="onCreate"
+            >
+              {{ busy ? 'Creating…' : 'Create match' }}
+            </button>
+          </template>
+
+          <template v-else>
+            <!-- Not a label wrapped round its input like the name above: a label
+                 may hold one labelable element, and the paste button is a second -->
+            <div class="field">
+              <label class="field__label" for="match-code">Match code</label>
+
+              <div class="code">
+                <input
+                  id="match-code"
+                  ref="codeField"
+                  v-model="code"
+                  class="field__input field__input--code"
+                  type="text"
+                  :maxlength="CODE_LENGTH"
+                  :disabled="busy"
+                  autocapitalize="characters"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="K7QM"
+                >
+
+                <button
+                  v-if="code.trim() === ''"
+                  type="button"
+                  class="paste"
+                  aria-label="Paste the code"
+                  :disabled="busy"
+                  @click="onPaste"
+                >
+                  <svg class="paste__icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="8" y="2" width="8" height="4" rx="1" />
+                    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              class="action"
+              :class="{'action--busy': busy}"
+              :disabled="!canJoin"
+              @click="onJoin"
+            >
+              {{ busy ? 'Joining…' : 'Join match' }}
+            </button>
+          </template>
+
+          <p v-if="error" class="error" role="alert">{{ error }}</p>
+        </form>
+      </section>
+    </div>
   </main>
 </template>
 
@@ -401,7 +413,7 @@ function onPaste(): void {
     min-height: 100%;
     padding: 2rem 1.25rem;
 
-    /* A pool of warmth behind the card, as though the one lamp over the table
+    /* A pool of warmth behind the cards, as though the one lamp over the table
        in the scene reached this screen too */
     background:
         radial-gradient(120% 90% at 50% 12%, rgb(74 122 96 / 8%), transparent 60%),
@@ -423,9 +435,18 @@ function onPaste(): void {
     color: var(--brass);
 }
 
-.card {
+/* The two cards are one stack and are spaced as one, leaving the lobby's own
+   gap to fall under the wordmark alone, where the separation is meant. The
+   width is carried here rather than by each card, so both are cut to it */
+.lobby__cards {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
     width: 100%;
     max-width: 24rem;
+}
+
+.card {
     padding: 1.5rem;
     border: 1px solid var(--brass-edge);
     border-radius: 0.75rem;
@@ -471,7 +492,7 @@ function onPaste(): void {
     margin-top: 1.5rem;
 }
 
-/* The card goes quiet the moment a match is being made: the press has been
+/* Both cards go quiet the moment a match is being made: the press has been
    taken, and nothing here can be touched again until it is answered. The button
    that was pressed is the exception, further down — it is carrying the only
    word about what the card is doing, so it does not dim with the rest */
