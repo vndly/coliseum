@@ -1,9 +1,9 @@
 <!-- A die face, carrying the same pip layout as the dice in the bowl.
 
      The game counts in dice, so the interface does too: a match's size is
-     chosen as a face, a seat is shown as a face, and whose turn it is is the
-     face that is lit. Decorative on its own — whatever it stands for is named
-     in text beside it or on the control that wraps it. -->
+     chosen as a face, and a seat is shown as a face. Decorative on its own —
+     whatever it stands for is named in text beside it or on the control that
+     wraps it. -->
 <script setup lang="ts">
 import {computed} from 'vue'
 

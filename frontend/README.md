@@ -2,7 +2,6 @@
 
 ## TODO
 
-- Remove dice in player indicator
 - Add firestore listner to show open matches
 - Allow to throw die with one click
 - Choose who starts randomly

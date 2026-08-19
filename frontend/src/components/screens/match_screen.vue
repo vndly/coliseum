@@ -658,7 +658,7 @@ onBeforeUnmount(() => {
       <header class="chrome__top">
         <ul class="rail">
           <li
-            v-for="(player, seat) in state?.players ?? []"
+            v-for="player in state?.players ?? []"
             :key="player.uid"
             class="rail__player"
             :class="{
@@ -666,10 +666,6 @@ onBeforeUnmount(() => {
               'rail__player--out': isOut(player),
             }"
           >
-            <DieFace
-              :value="seat + 1"
-              :lit="!finished && player.uid === activePlayer?.uid"
-            />
             <span class="rail__name">{{ player.name }}</span>
 
             <!-- A player out of the match is named rather than counted, because
@@ -966,10 +962,7 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
     gap: 0.625rem;
-
-    /* Tighter on the left: the die face is already inset by its own corners,
-       so an even pill would sit lopsided */
-    padding: 0.625rem 1rem 0.625rem 0.75rem;
+    padding: 0.625rem 1rem;
     border: 1px solid transparent;
     border-radius: 999px;
     background: rgb(14 18 16 / 55%);
@@ -979,10 +972,6 @@ onBeforeUnmount(() => {
 .rail__player--active {
     border-color: var(--brass-edge);
     background: rgb(43 23 13 / 80%);
-}
-
-.rail__player .die-face {
-    --size: 1.375rem;
 }
 
 .rail__name {
@@ -1042,10 +1031,6 @@ onBeforeUnmount(() => {
 .rail__player--out .rail__name {
     color: var(--bone-faint);
     text-decoration: line-through;
-}
-
-.rail__player--out .die-face {
-    opacity: 0.45;
 }
 
 .chrome__bottom {
