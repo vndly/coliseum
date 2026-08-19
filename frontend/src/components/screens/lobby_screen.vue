@@ -1,19 +1,24 @@
-<!-- The way into a match: say who you are, then start one or take a seat in one
-     that exists. Two cards, because the name is asked once and the choice under
-     it is only ever between the two ways in.
+<!-- The way into a match: say who you are, then start one or take a seat in
+     one that exists. The name is out on its own at the top because it is asked
+     once and stands for every way in beneath it.
 
-     A code is enough on its own. Typing one takes the seat as its last
-     character lands, and the match's own screen is where the seats filling up is
-     watched — the lobby never shows a match it is about to join. -->
+     There are three of those, and the middle one is only in the page while it
+     has something to offer: a match somebody is already sitting in, waiting, is
+     quicker than either half of the card under it. A code is still enough on its
+     own — typing one takes the seat as its last character lands — and the match's
+     own screen is where the seats filling up is watched, so the lobby never
+     shows a match it is about to join. -->
 <script setup lang="ts">
-import {computed, nextTick, onMounted, ref, useTemplateRef, watch} from 'vue'
+import {computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch} from 'vue'
 import {useRoute, useRouter} from 'vue-router'
 import DieFace from '@/components/die_face.vue'
 import {isMatchCode, normaliseMatchCode} from '@/match/codes'
+import {watchPlayerId} from '@/match/firebase'
 import {MatchClient} from '@/match/match_client'
+import {watchOpenMatches} from '@/match/open_matches'
+import type {OpenMatch} from '@/match/open_matches'
+import {MAX_PLAYERS, MIN_PLAYERS} from '@/match/rules'
 
-const MIN_PLAYERS = 2
-const MAX_PLAYERS = 6
 const CODE_LENGTH = 4
 const NAME_LIMIT = 16
 const NAME_KEY = 'coliseum.player-name' // Where the last name played under is kept
@@ -24,12 +29,28 @@ const router = useRouter()
 const nameField = useTemplateRef<HTMLInputElement>('nameField')
 const codeField = useTemplateRef<HTMLInputElement>('codeField')
 
+// Neither is a ref: both are only ever the call that ends a subscription
+let stopWatchingMatches: (() => void) | null = null
+let stopWatchingPlayer: (() => void) | null = null
+
 const mode = ref<'create' | 'join'>('create')
 const playerName = ref('')
 const playerCount = ref(MIN_PLAYERS)
 const code = ref('')
 const busy = ref(false)
 const error = ref('')
+const openMatches = ref<OpenMatch[]>([])
+
+// The row being joined, by code, and empty whenever the wait belongs to the
+// card below instead. A press has to be attributable: it dims the whole screen
+// like any other, but only the control that was actually pressed may say what
+// is happening.
+const seatingCode = ref('')
+
+// The identity this browser already has, if it has one. Only ever to mark a
+// player's own match in the list — a browser that has never taken a seat has
+// none, and is not given one for the sake of a label.
+const playerId = ref('')
 
 const seatCounts = computed<number[]>(() => {
   const counts: number[] = []
@@ -49,6 +70,15 @@ const canJoin = computed<boolean>(
     && normaliseMatchCode(code.value).length === CODE_LENGTH
     && !busy.value,
 )
+
+// A row in the list is a join that skips the code, so it asks for what is left:
+// a name to play under, and no other seat already being taken
+const canTakeSeat = computed<boolean>(() => trimmedName.value.length > 0 && !busy.value)
+
+// What the card below is doing, rather than what the list above it is. Both
+// wait on the same flag, but "Creating…" is the button's account of its own
+// press and would be a lie about a seat being taken out of the list.
+const formBusy = computed<boolean>(() => busy.value && seatingCode.value === '')
 
 /**
  * The name this browser last played under.
@@ -102,6 +132,24 @@ onMounted(() => {
       void runJoin()
     }
   })
+
+  // Before the matches, and not merely beside them. Asking for the identity is
+  // also what introduces the signed-in user to the database client, and the
+  // list's query is the one read in this app that is made without signing in
+  // first — asked before this, it would go out with no identity at all, for
+  // everybody rather than only for a browser that has never played.
+  stopWatchingPlayer = watchPlayerId((identifier) => {
+    playerId.value = identifier ?? ''
+  })
+
+  stopWatchingMatches = watchOpenMatches((matches) => {
+    openMatches.value = matches
+  })
+})
+
+onBeforeUnmount(() => {
+  stopWatchingMatches?.()
+  stopWatchingPlayer?.()
 })
 
 function describe(reason: unknown): string {
@@ -154,14 +202,20 @@ async function runCreate(): Promise<void> {
   }
 }
 
-// The seat is taken on the strength of the code alone. Every way that can fail
-// — no such match, full, already under way — is refused by the join itself, and
-// arrives here as the message shown under the form.
-async function runJoin(): Promise<void> {
-  const match = normaliseMatchCode(code.value)
-
+/**
+ * Takes a seat in one match and goes to it, however that match was named.
+ *
+ * Both ways in are the same seat being taken, so both come through here: the
+ * code typed into the field below, and the row pressed in the list above it.
+ * Every way it can fail — no such match, full, already under way — is refused
+ * by the join itself and comes back as a sentence. Where that sentence is shown
+ * is left to the caller, because it belongs beside whichever of the two was
+ * used.
+ * @param match - The match's code, already normalised
+ * @returns Why the seat was refused, or an empty string if it was taken
+ */
+async function takeSeat(match: string): Promise<string> {
   busy.value = true
-  error.value = ''
   rememberName(trimmedName.value)
 
   try {
@@ -173,15 +227,74 @@ async function runJoin(): Promise<void> {
         code: match,
       },
     })
+
+    return ''
   } catch (reason: unknown) {
-    error.value = describe(reason)
     busy.value = false
 
-    // The code is the only thing here that can be wrong, and a join that began
-    // on its last character took the caret out of it. It goes back.
-    await nextTick()
-    codeField.value?.focus()
+    return describe(reason)
   }
+}
+
+async function runJoin(): Promise<void> {
+  error.value = ''
+
+  const refusal = await takeSeat(normaliseMatchCode(code.value))
+
+  if (refusal === '') {
+    return
+  }
+
+  error.value = refusal
+
+  // The code is the only thing here that can be wrong, and a join that began on
+  // its last character took the caret out of it. It goes back.
+  await nextTick()
+  codeField.value?.focus()
+}
+
+/**
+ * Takes the seat a row in the list stands for, which is the code entered
+ * without anybody having to read it first.
+ *
+ * The refusal is shown under the form below rather than beside the row that was
+ * pressed, because by the time there is one that row is gone: the only refusal
+ * a listed match can give is that somebody else took the last seat, and the
+ * write that did so is the same one that takes the match out of the list. A
+ * message in a card that the message's own cause has just closed is a message
+ * nobody reads.
+ * @param match - The match the row was drawn from
+ */
+async function runTakeSeat(match: OpenMatch): Promise<void> {
+  error.value = ''
+  seatingCode.value = match.code
+
+  const refusal = await takeSeat(match.code)
+
+  seatingCode.value = ''
+  error.value = refusal
+}
+
+/**
+ * Whether this player is already sitting in a listed match — their own, most
+ * often, left behind by walking out of it rather than by never joining.
+ * @param match - The match the row was drawn from
+ * @returns Whether their identifier is one of the seats
+ */
+function isSeated(match: OpenMatch): boolean {
+  return playerId.value !== '' && match.uids.includes(playerId.value)
+}
+
+/**
+ * What a row says when it is read out rather than looked at, since the dice on
+ * it are decorative and carry nothing on their own.
+ * @param match - The match the row was drawn from
+ * @returns The match named, and how full it is
+ */
+function seatLine(match: OpenMatch): string {
+  const seats = `${match.seatsTaken} of ${match.seatsTotal} seats taken`
+
+  return isSeated(match) ? `Your match, ${seats}` : `${match.host}, ${seats}`
 }
 
 /**
@@ -257,6 +370,10 @@ function onJoin(): void {
   void runJoin()
 }
 
+function onTakeSeat(match: OpenMatch): void {
+  void runTakeSeat(match)
+}
+
 function onPaste(): void {
   void runPaste()
 }
@@ -288,6 +405,47 @@ function onPaste(): void {
             autocomplete="nickname"
           >
         </label>
+      </section>
+
+      <!-- Only in the page while somebody is waiting in something. A match with
+           a seat still open is quicker than either half of the card below, so it
+           sits above it — and when there is none, the two cards close back up as
+           though this one had never been there. -->
+      <section v-if="openMatches.length > 0" class="card card--matches">
+        <p class="field__label">Open matches</p>
+
+        <ul class="matches">
+          <li v-for="match in openMatches" :key="match.code">
+            <button
+              type="button"
+              class="match"
+              :class="{'match--busy': seatingCode === match.code}"
+              :aria-label="seatLine(match)"
+              :disabled="!canTakeSeat"
+              @click="onTakeSeat(match)"
+            >
+              <span class="match__host" :class="{'match__host--yours': isSeated(match)}">
+                {{ isSeated(match) ? 'Your match' : match.host }}
+              </span>
+
+              <!-- The dice count the seats the same way they do inside the
+                   match, lit as far as the seats are taken — until this is the
+                   row being joined, when what is happening takes their place -->
+              <span v-if="seatingCode === match.code" class="match__word">Joining…</span>
+
+              <span v-else class="match__seats">
+                <DieFace
+                  v-for="seat in match.seatsTotal"
+                  :key="seat"
+                  :value="seat"
+                  :lit="seat <= match.seatsTaken"
+                />
+              </span>
+            </button>
+          </li>
+        </ul>
+
+        <p v-if="trimmedName === ''" class="hint">Type your name to take a seat</p>
       </section>
 
       <section class="card">
@@ -340,11 +498,11 @@ function onPaste(): void {
             <button
               type="submit"
               class="action"
-              :class="{'action--busy': busy}"
+              :class="{'action--busy': formBusy}"
               :disabled="!canCreate"
               @click="onCreate"
             >
-              {{ busy ? 'Creating…' : 'Create match' }}
+              {{ formBusy ? 'Creating…' : 'Create match' }}
             </button>
           </template>
 
@@ -388,11 +546,11 @@ function onPaste(): void {
             <button
               type="submit"
               class="action"
-              :class="{'action--busy': busy}"
+              :class="{'action--busy': formBusy}"
               :disabled="!canJoin"
               @click="onJoin"
             >
-              {{ busy ? 'Joining…' : 'Join match' }}
+              {{ formBusy ? 'Joining…' : 'Join match' }}
             </button>
           </template>
 
@@ -459,6 +617,94 @@ function onPaste(): void {
         0 1.5rem 3rem rgb(0 0 0 / 45%);
 }
 
+/* The list's own card is a column, so the label over it and whatever is said
+   under it are spaced by one rule. A margin instead would reach the error in
+   the card below as well, since both are the same class */
+.card--matches {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+/* Given a ceiling rather than a length: past four rows it scrolls, so however
+   busy the game gets the two ways into a match stay on the fold under it. On a
+   screen too short for four, the viewport sets the figure instead */
+.matches {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-height: min(13.5rem, 30vh);
+    overflow-y: auto;
+    list-style: none;
+    scrollbar-width: thin;
+    scrollbar-color: rgb(200 164 104 / 20%) transparent;
+}
+
+/* Cut into the card the way the switch and the seat counts are, so a row reads
+   as something to press rather than something to read. The rim is there before
+   it is lit, so hovering a row does not move the one under it */
+.match {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.625rem 0.75rem;
+    border: 1px solid transparent;
+    border-radius: 0.5rem;
+    background: var(--well);
+    cursor: pointer;
+    transition: background 160ms ease, border-color 160ms ease;
+}
+
+.match:hover:not(:disabled) {
+    border-color: var(--brass);
+    background: var(--brass-glow);
+}
+
+/* A name is whatever its player typed, so it is cut off at the end of the room
+   it has rather than allowed to push the dice off the row */
+.match__host {
+    overflow: hidden;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* A match this player is already sitting in, in the brass everything of theirs
+   on this screen is named in */
+.match__host--yours {
+    color: var(--brass);
+}
+
+/* Stands where the dice stood, once the row has been pressed and the count has
+   nothing left to say */
+.match__word {
+    flex-shrink: 0;
+    font-size: 0.8125rem;
+    color: var(--brass);
+}
+
+/* The dice are the whole of what a row counts, so they are read as one run and
+   never wrap out of it — a six-seat match keeps its six on the line */
+.match__seats {
+    display: flex;
+    flex-shrink: 0;
+    gap: 0.25rem;
+}
+
+.match__seats .die-face {
+    --size: 1.25rem;
+}
+
+/* What the greyed-out rows are waiting for. Only while the name is missing:
+   once a join is under way there is nothing left to ask for */
+.hint {
+    font-size: 0.8125rem;
+    color: var(--bone-faint);
+}
+
 .switch {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -492,16 +738,27 @@ function onPaste(): void {
     margin-top: 1.5rem;
 }
 
-/* Both cards go quiet the moment a match is being made: the press has been
-   taken, and nothing here can be touched again until it is answered. The button
-   that was pressed is the exception, further down — it is carrying the only
-   word about what the card is doing, so it does not dim with the rest */
+/* Every card goes quiet the moment a match is being made: the press has been
+   taken, and nothing here can be touched again until it is answered. Whatever
+   was pressed is the exception — it is carrying the only word about what the
+   screen is doing, so it stays lit while the rest dims. There are two of those,
+   the row below and the action button further down, and both are written after
+   this rule rather than before it: each weighs exactly what this weighs, so
+   nothing but the order they are read in lets them win */
+.match:disabled,
 .switch__option:disabled,
 .field__input:disabled,
 .counts__option:disabled,
 .paste:disabled {
     opacity: 0.45;
     cursor: not-allowed;
+}
+
+/* The row a seat is being taken out of */
+.match--busy:disabled {
+    border-color: var(--brass-edge);
+    opacity: 1;
+    cursor: wait;
 }
 
 .field {

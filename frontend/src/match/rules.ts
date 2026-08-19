@@ -18,6 +18,17 @@ import type {DieSnapshot, ThrowResolution} from '@/scene/die_state'
 /** How many dice each player is given at the start of a match. */
 export const STARTING_POOL = 6
 
+/**
+ * The fewest and the most players a match can be made for.
+ *
+ * Here rather than on the screen that offers the choice, because the lobby is
+ * no longer the only thing that needs them: a match read back out of the
+ * database is checked against the same range before it is offered as a seat,
+ * and a stored count nobody bounded reaches whatever draws the seats.
+ */
+export const MIN_PLAYERS = 2
+export const MAX_PLAYERS = 6
+
 /** The face that takes a die out of the match instead of into a group. */
 const REMOVED_FACE = 6
 

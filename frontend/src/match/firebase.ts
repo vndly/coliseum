@@ -1,5 +1,6 @@
 import {initializeApp} from 'firebase/app'
-import {getAuth, signInAnonymously} from 'firebase/auth'
+import {getAuth, onAuthStateChanged, signInAnonymously} from 'firebase/auth'
+import type {Unsubscribe} from 'firebase/auth'
 import {getFirestore} from 'firebase/firestore'
 
 /**
@@ -37,4 +38,23 @@ export async function currentPlayerId(): Promise<string> {
   const credential = await signInAnonymously(getAuth(app))
 
   return credential.user.uid
+}
+
+/**
+ * Reports the identifier this browser already plays under, without ever
+ * creating one.
+ *
+ * Deliberately not currentPlayerId above: signing in is what brings an account
+ * into existence, and somebody who has done nothing but look at the lobby
+ * should not leave one behind. Firebase restores the anonymous user from local
+ * storage on its own schedule, so this answers null first and again with the
+ * identifier once it is back — and answers null for good on a browser that has
+ * never taken a seat anywhere.
+ * @param onChange - Given the identifier, or null while there is none
+ * @returns The call that stops the reporting
+ */
+export function watchPlayerId(onChange: (playerId: string | null) => void): Unsubscribe {
+  return onAuthStateChanged(getAuth(app), (user) => {
+    onChange(user?.uid ?? null)
+  })
 }
