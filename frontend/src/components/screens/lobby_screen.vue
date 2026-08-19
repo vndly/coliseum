@@ -540,6 +540,7 @@ function onPaste(): void {
     font-family: var(--font-mono);
     font-size: 1.5rem;
     font-weight: 600;
+    line-height: 1.75rem;
     letter-spacing: 0.3em;
     text-align: center;
     text-transform: uppercase;
@@ -583,10 +584,16 @@ function onPaste(): void {
     stroke-linejoin: round;
 }
 
+/* Stood to the height of a code field, so that either half of the switch brings
+   the card up to the same height and the button under them does not move as
+   they are swapped. The figure is the code field's own box: 1.75rem of line
+   between 0.75rem of padding and a 1px border on each side */
 .counts {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 0.5rem;
+    min-height: 3.375rem;
 }
 
 .counts__option {
