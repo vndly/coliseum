@@ -23,7 +23,7 @@ export interface MatchState {
   code: string
   playerCount: number
   phase: MatchPhase
-  players: MatchPlayer[] // In the order they joined, which is the order they play in
+  players: MatchPlayer[] // Join order while the lobby fills; the order they play in once it has
 
   /**
    * How many dice each player is holding, by identifier.

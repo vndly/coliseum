@@ -81,6 +81,29 @@ export function throwSize(state: MatchState, uid: string): number {
 }
 
 /**
+ * The seats of a match, in the order they are to be played in.
+ *
+ * Drawn in one go when the last seat is taken, rather than a seat at a time as
+ * the players arrive, so that nobody watching the lobby fill can work out where
+ * they are sitting before the match has started.
+ * @param players - Every seat, in the order they joined
+ * @returns The same seats in a random order, as a new array
+ */
+export function shuffledPlayers(players: MatchPlayer[]): MatchPlayer[] {
+  const undrawn = [...players]
+  const order: MatchPlayer[] = []
+
+  // Taken one at a time out of what is left, which is as even as a swap in
+  // place and never has to answer for an index the type checker cannot see is
+  // in range
+  while (undrawn.length > 0) {
+    order.push(...undrawn.splice(Math.floor(Math.random() * undrawn.length), 1))
+  }
+
+  return order
+}
+
+/**
  * Who plays after a given seat, skipping everyone with nothing left to throw.
  * @param players - Every seat, in the order they play in
  * @param pools - Every hand

@@ -14,7 +14,7 @@ import {createMatchCode} from '@/match/codes'
 import {currentPlayerId, firestore} from '@/match/firebase'
 import {parseMatchState, parseThrowRecord} from '@/match/match_state'
 import type {MatchState, ThrowRecord} from '@/match/match_state'
-import {STARTING_POOL, nextActivePlayer, resolveThrow} from '@/match/rules'
+import {STARTING_POOL, nextActivePlayer, resolveThrow, shuffledPlayers} from '@/match/rules'
 import {createOpeningDie} from '@/scene/die_state'
 import type {DieSnapshot, ThrownDie} from '@/scene/die_state'
 
@@ -67,8 +67,9 @@ export class MatchClient {
   }
 
   /**
-   * Starts a match with this player in the first seat, and therefore first to
-   * throw.
+   * Starts a match with this player in the first seat, which is where the
+   * lobby seats them rather than where they will play: the order of play is
+   * drawn when the last seat is taken.
    *
    * The code is drawn and then claimed by a write that refuses to overwrite,
    * rather than searched for and then taken — between a search and a write,
@@ -129,7 +130,10 @@ export class MatchClient {
    *
    * Both happen in a single transaction. Starting the match anywhere else would
    * need somebody to be watching for the moment the seats filled, and the
-   * player who fills the last seat is the only one guaranteed to be there.
+   * player who fills the last seat is the only one guaranteed to be there. The
+   * same write draws the order of play, so the last player to arrive draws it
+   * for everybody — which is the same authority every other player is trusted
+   * with on their own turn.
    * @param code - The match to join
    * @param name - What to call this player
    */
@@ -177,6 +181,11 @@ export class MatchClient {
       if (players.length === state.playerCount) {
         update.phase = 'playing'
         update.bowl = [createOpeningDie()]
+
+        // The seats are drawn now rather than as each was taken, so that a
+        // player watching the lobby fill cannot tell where they are sitting
+        // until the whole table finds out at once
+        update.players = shuffledPlayers(players)
 
         // Counted like any other write to the bowl. Without this the players
         // already sitting in the lobby see a bowl whose version never moved,
