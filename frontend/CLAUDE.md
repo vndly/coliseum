@@ -13,5 +13,24 @@ Coliseum (Vite + Vue 3, TypeScript, Composition API with `<script setup>`, ESLin
 
 ## Reference Docs
 
-- `docs/rules.md` — the rules this project works under: tooling, layering, match authority, physics, deployment. Read before making changes. If a change alters one of those rules, or adds one, update that file in the same change — it is the only place they live.
+- `docs/rules.md` — the rules this project works under: layering, match authority, physics. Read before making changes. If a change alters one of those rules, or adds one, update that file in the same change — it is the only place they live.
 - `docs/typescript.md` — style, naming, imports. Read when editing TypeScript files.
+
+## Workflow
+
+- **After completing code changes**: Run `npm run lint:fix` and fix remaining errors, run `npm run build` (typechecks first) and fix any failures, then run `/delta-review` before responding.
+- **No test suite**: This project has no tests by design. TypeScript and the type-aware lint rules are the safety net — do not weaken `strict` or `noUncheckedIndexedAccess`, and do not add `any` to silence an error.
+- **Doc Maintenance**: After changes, check if `CLAUDE.md`, `docs/rules.md` and `docs/typescript.md` need updating. A rule that changes, or a new one, goes in the file that already holds its section: workflow, tooling and deployment here, layering, match and physics in `docs/rules.md`.
+
+## Tooling
+
+- **TypeScript projects**: `tsconfig.json` only references `tsconfig.app.json` (browser, `src/`, extends `@vue/tsconfig/tsconfig.dom.json`) and `tsconfig.node.json` (`vite.config.ts`, extends `@tsconfig/node24`). An option the two bases don't already cover must be set in both.
+- **Three.js**: `three` ships no type declarations, so `@types/three` is a required devDependency and its version tracks `three`. Addons are imported from `three/addons/*` with the `.js` extension — the no-extension rule in `docs/typescript.md` applies to `@` alias imports, not to package subpaths.
+- **Fonts**: Fonts come from Google Fonts, served by its CDN via a `<link>` in `index.html`. No font packages in `package.json` and no font files in the repo.
+- **Images**: Import assets from `src/assets/` so Vite fingerprints them; nothing goes in `public/`.
+
+## Deployment
+
+- **Build output**: `npm run build` writes into `../backend/public`, the directory Firebase Hosting serves, and empties it first. Routing is history mode, which relies on the catch-all rewrite in `../backend/firebase.json`. `npm run deploy` builds and then deploys that directory to the project's default Hosting site. Neither deploy script touches Firestore — both pass `--only hosting` — so an index added to `firestore.indexes.json` reaches the project only through `firebase deploy --only firestore:indexes`, run from `../backend`. A bare `firebase deploy` now carries the indexes along with the site, which it did not before the `firestore` block existed.
+- **Firebase**: The web config lives in `src/match/firebase.ts` and is public by design — it is a set of identifiers, not a secret, and the security rules are the actual boundary. The project needs both Firestore created *and* the Anonymous sign-in provider enabled; without the second, every write fails with `auth/configuration-not-found`. Analytics is deliberately not initialised.
+

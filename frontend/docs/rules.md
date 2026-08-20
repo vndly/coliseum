@@ -1,11 +1,5 @@
 # Project Rules
 
-## Workflow
-
-- **After completing code changes**: Run `npm run lint:fix` and fix remaining errors, run `npm run build` (typechecks first) and fix any failures, then run `/delta-review` before responding.
-- **No test suite**: This project has no tests by design. TypeScript and the type-aware lint rules are the safety net — do not weaken `strict` or `noUncheckedIndexedAccess`, and do not add `any` to silence an error.
-- **Doc Maintenance**: After changes, check if `CLAUDE.md`, `docs/rules.md` and `docs/typescript.md` need updating. A rule that changes, or a new one, belongs in this file rather than in `CLAUDE.md`, which only points here.
-
 ## Layering
 
 - **Multiplayer**: The layers run `components` → `match` → `scene`. Nothing under `src/match/` may import Vue, and nothing under `src/scene/` may import from `src/match/` — the scene produces and consumes the network's shapes (`die_state.ts`) without knowing a network exists. A screen is what joins the two.
@@ -24,15 +18,3 @@
 - **Scene units**: One world unit is one die width. Dice modelled at true metric scale are far below a physics engine's default tolerances, which is what makes small fast bodies jitter, sink and tunnel. Every measurement lives in `src/scene/dimensions.ts` — add new ones there rather than inline. Because the scale is not metric, `LENGTH_UNIT` has to be handed to Rapier's `integrationParameters.lengthUnit`, which sizes the engine's tolerances in metres. Almost nothing it scales matters — the overlap it leaves uncorrected and the sleep threshold both change no result in the bowl — and the one that does, the contact prediction distance, it puts far too high: at `LENGTH_UNIT` it reaches two fifths of a die width, so dice in the bowl are solved against each other before they touch and an arriving die's impact is bled away before it lands. `CONTACT_PREDICTION_DISTANCE` sets it back to twice Rapier's own default, which is enough for a die crossing most of its own width per step and not enough to deaden the bowl.
 - **Contact materials**: Every collider in the scene asks for `CoefficientCombineRule.Multiply` on both friction and restitution, and anything added to the world has to as well. A pair that disagrees is resolved by a fixed precedence rather than by what either collider meant. Multiplying is what lets the die's three pairings be set apart — bouncy against another die, dull against the bowl, dead against the felt — which under Rapier's default average would be three demands on one number. What it costs is that a surface meant to grip or bounce harder than a die does can only say so by giving its own figure up to 1.0, since the product can never exceed either half; `BOWL_FRICTION` is the one that has had to.
 - **What moves a struck die**: The bowl's floor, not the die that hit it. A die is tipped by the drag under its own base, so `BOWL_FRICTION` carries that number and `DIE_FRICTION` is deliberately the loosest pairing in the scene — gripping two dice together spends the throw on the die it clipped and pushes the struck one away instead of driving it down into the floor that could turn it. `DIE_RESTITUTION` is the other half: a die pinned by twenty times real gravity cannot roll without lifting its own centre of mass, so the two have to bounce apart hard enough to give it the moment.
-
-## Tooling
-
-- **TypeScript projects**: `tsconfig.json` only references `tsconfig.app.json` (browser, `src/`, extends `@vue/tsconfig/tsconfig.dom.json`) and `tsconfig.node.json` (`vite.config.ts`, extends `@tsconfig/node24`). An option the two bases don't already cover must be set in both.
-- **Three.js**: `three` ships no type declarations, so `@types/three` is a required devDependency and its version tracks `three`. Addons are imported from `three/addons/*` with the `.js` extension — the no-extension rule in `docs/typescript.md` applies to `@` alias imports, not to package subpaths.
-- **Fonts**: Fonts come from Google Fonts, served by its CDN via a `<link>` in `index.html`. No font packages in `package.json` and no font files in the repo.
-- **Images**: Import assets from `src/assets/` so Vite fingerprints them; nothing goes in `public/`.
-
-## Deployment
-
-- **Build output**: `npm run build` writes into `../backend/public`, the directory Firebase Hosting serves, and empties it first. Routing is history mode, which relies on the catch-all rewrite in `../backend/firebase.json`. `npm run deploy` builds and then deploys that directory to the project's default Hosting site. Neither deploy script touches Firestore — both pass `--only hosting` — so an index added to `firestore.indexes.json` reaches the project only through `firebase deploy --only firestore:indexes`, run from `../backend`. A bare `firebase deploy` now carries the indexes along with the site, which it did not before the `firestore` block existed.
-- **Firebase**: The web config lives in `src/match/firebase.ts` and is public by design — it is a set of identifiers, not a secret, and the security rules are the actual boundary. The project needs both Firestore created *and* the Anonymous sign-in provider enabled; without the second, every write fails with `auth/configuration-not-found`. Analytics is deliberately not initialised.
