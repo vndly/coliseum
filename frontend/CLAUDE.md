@@ -18,7 +18,7 @@ Coliseum (Vite + Vue 3, TypeScript, Composition API with `<script setup>`, ESLin
 
 ## Reference Docs
 
-- `docs/game.md` — the rules this project works under: match authority, physics. Read before making changes. If a change alters one of those rules, or adds one, update that file in the same change — it is the only place they live.
+- `docs/game.md` — match authority, the ruleset, the lobby, physics tuning. Read before editing `src/match/` or `src/scene/`.
 - `docs/typescript.md` — style, naming, imports. Read when editing TypeScript files.
 
 ## Workflow
