@@ -4,11 +4,12 @@
 
 - Allow to throw die with one click
 - Choose who starts randomly
+- Is the place of the initia die fixed?
 
 # LATER
 
 - Configure how many dice per player
-- Configure die color
+- Configure die color/skins
 - Tournament
   - Points
     - 1 point per win
@@ -16,7 +17,6 @@
   - Target
     - Choose best of X
     - First one to get X points
-- Dice skins
 - Add hole in the bowl where dice can fall off
 - New rules
   - Flush: if you get 1, 2, 3, 4 and 5 you collect all dice
