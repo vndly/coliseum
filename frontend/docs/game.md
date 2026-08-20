@@ -1,9 +1,4 @@
-# Project Rules
-
-## Layering
-
-- **Multiplayer**: The layers run `components` → `match` → `scene`. Nothing under `src/match/` may import Vue, and nothing under `src/scene/` may import from `src/match/` — the scene produces and consumes the network's shapes (`die_state.ts`) without knowing a network exists. A screen is what joins the two.
-- **3D scene**: Nothing under `src/scene/` may be reactive. Vue owns the canvas element and the scene object's lifetime; the scene owns everything inside it. Per-frame data must never pass through a `ref`.
+# Game
 
 ## Match
 

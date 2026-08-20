@@ -11,16 +11,21 @@ Coliseum (Vite + Vue 3, TypeScript, Composition API with `<script setup>`, ESLin
 - `assets/styles.css` — the global tokens and reset. Everything else is a scoped component style.
 - `main.ts` creates the root `app.vue`, installs `router.ts`, and mounts.
 
+## Layering
+
+- **Multiplayer**: The layers run `components` → `match` → `scene`. Nothing under `src/match/` may import Vue, and nothing under `src/scene/` may import from `src/match/` — the scene produces and consumes the network's shapes (`die_state.ts`) without knowing a network exists. A screen is what joins the two.
+- **3D scene**: Nothing under `src/scene/` may be reactive. Vue owns the canvas element and the scene object's lifetime; the scene owns everything inside it. Per-frame data must never pass through a `ref`.
+
 ## Reference Docs
 
-- `docs/rules.md` — the rules this project works under: layering, match authority, physics. Read before making changes. If a change alters one of those rules, or adds one, update that file in the same change — it is the only place they live.
+- `docs/game.md` — the rules this project works under: match authority, physics. Read before making changes. If a change alters one of those rules, or adds one, update that file in the same change — it is the only place they live.
 - `docs/typescript.md` — style, naming, imports. Read when editing TypeScript files.
 
 ## Workflow
 
 - **After completing code changes**: Run `npm run lint:fix` and fix remaining errors, run `npm run build` (typechecks first) and fix any failures, then run `/delta-review` before responding.
 - **No test suite**: This project has no tests by design. TypeScript and the type-aware lint rules are the safety net — do not weaken `strict` or `noUncheckedIndexedAccess`, and do not add `any` to silence an error.
-- **Doc Maintenance**: After changes, check if `CLAUDE.md`, `docs/rules.md` and `docs/typescript.md` need updating. A rule that changes, or a new one, goes in the file that already holds its section: workflow, tooling and deployment here, layering, match and physics in `docs/rules.md`.
+- **Doc Maintenance**: After changes, check if `CLAUDE.md`, `docs/game.md` and `docs/typescript.md` need updating. A rule that changes, or a new one, goes in the file that already holds its section: workflow, layering, tooling and deployment here, match and physics in `docs/game.md`.
 
 ## Tooling
 
@@ -33,4 +38,3 @@ Coliseum (Vite + Vue 3, TypeScript, Composition API with `<script setup>`, ESLin
 
 - **Build output**: `npm run build` writes into `../backend/public`, the directory Firebase Hosting serves, and empties it first. Routing is history mode, which relies on the catch-all rewrite in `../backend/firebase.json`. `npm run deploy` builds and then deploys that directory to the project's default Hosting site. Neither deploy script touches Firestore — both pass `--only hosting` — so an index added to `firestore.indexes.json` reaches the project only through `firebase deploy --only firestore:indexes`, run from `../backend`. A bare `firebase deploy` now carries the indexes along with the site, which it did not before the `firestore` block existed.
 - **Firebase**: The web config lives in `src/match/firebase.ts` and is public by design — it is a set of identifiers, not a secret, and the security rules are the actual boundary. The project needs both Firestore created *and* the Anonymous sign-in provider enabled; without the second, every write fails with `auth/configuration-not-found`. Analytics is deliberately not initialised.
-
