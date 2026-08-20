@@ -504,12 +504,17 @@ function onCancelLeave(): void {
  * The only way out of the match that is not the back button, and the only one
  * the guard below does not stop — every press that reaches here has already
  * been answered by whoever pressed it.
+ *
+ * Replaces rather than pushes: the match is behind whoever is leaving it, and
+ * an address left standing in the history is one the back button would walk
+ * them straight back into — with their seat still in the match, nothing there
+ * would turn them away again.
  */
 function onLeave(): void {
   leaveAllowed = true
   showLeave.value = false
 
-  void router.push({
+  void router.replace({
     name: 'home',
   })
 }
