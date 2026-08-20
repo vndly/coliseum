@@ -3,9 +3,6 @@
 ## TODO
 
 - Allow to throw die with one click
-
-# LATER
-
 - Configure how many dice per player
 - Configure die color/skins
 - Tournament
