@@ -3,7 +3,6 @@
 ## TODO
 
 - Allow to throw die with one click
-- Is the place of the initia die fixed?
 
 # LATER
 
