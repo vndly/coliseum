@@ -2,7 +2,6 @@
 
 ## TODO
 
-- Reduce dice friction
 - Play with bots
 - Allow to throw die with one click
 - Configure how many dice per player
