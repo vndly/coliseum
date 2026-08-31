@@ -35,6 +35,21 @@ const REMOVED_FACE = 6
 /** The fewest dice showing the same value that count as a group. */
 const GROUP_SIZE = 2
 
+/**
+ * The values a flush is made of: one of each and nothing else in the bowl.
+ *
+ * Every value a die keeps, which is to say every face but the six. A bowl
+ * holding one of each is holding as many different values as it can, and the
+ * whole of it goes back to the hand that completed it.
+ */
+const FLUSH_FACES = [
+  1,
+  2,
+  3,
+  4,
+  5,
+]
+
 /** Everything one settled throw changes about the match it was made in. */
 export interface ThrowOutcome {
   resolution: ThrowResolution // What happened, in the order it is to be watched
@@ -57,10 +72,11 @@ export function poolSize(state: MatchState, uid: string): number {
 /**
  * Whether the player to throw has to throw their whole hand.
  *
- * The bowl empties when a group is taken out of it, and the player who arrives
- * to an empty one goes all in. Judged on the turn having begun rather than on
- * the bowl alone: a player who throws again into a bowl the sixes emptied is
- * part way through a turn, and throws one die like anybody else.
+ * The bowl empties when a group or a flush is taken out of it — a flush always,
+ * since it is the whole bowl — and the player who arrives to an empty one goes
+ * all in. Judged on the turn having begun rather than on the bowl alone: a
+ * player who throws again into a bowl the sixes emptied is part way through a
+ * turn, and throws one die like anybody else.
  * @param state - The match as it currently stands
  * @returns Whether this turn is an all-in turn
  */
@@ -161,8 +177,15 @@ export function survivingPlayer(
  *
  * In the order the rules are written, which is also the order they are watched
  * in and the only order that gives the right answer: the sixes leave the match
- * first, and only what is left of the bowl is looked at for groups. Two sixes
- * are therefore not a pair — they are two dice that were already gone.
+ * first, and only what is left of the bowl is looked at for a flush and then
+ * for groups. Two sixes are therefore not a pair — they are two dice that were
+ * already gone — and a bowl of one to five beside a six is still a flush, since
+ * by the time the bowl is judged the six is not in it.
+ *
+ * The flush and the groups are asked in turn but can never both answer: five
+ * different values are five dice with nothing shared between them. Either way
+ * what comes back is dice going to the thrower's hand, and everything after
+ * this reads them the same.
  *
  * The dice that missed the bowl need no part in this. A die that reached the
  * table left play where it landed and is already absent from the bowl handed
@@ -190,7 +213,8 @@ export function resolveThrow(
     }
   }
 
-  const returned = groupedDice(standing)
+  const flushed = flushDice(standing)
+  const returned = flushed.length > 0 ? flushed : groupedDice(standing)
   const bowl = standing.filter((die) => !returned.includes(die.id))
 
   const pools: Record<string, number> = {
@@ -201,7 +225,8 @@ export function resolveThrow(
     pools[thrower.uid] = (pools[thrower.uid] ?? 0) + returned.length
   }
 
-  // A group ends the turn, and so does having thrown the last die in hand:
+  // A group ends the turn, a flush ends it the same way, and so does having
+  // thrown the last die in hand:
   // there is nothing left to throw again with, and the rules only offer the
   // choice to a player who still has one.
   const spent = thrower === undefined || (pools[thrower.uid] ?? 0) === 0
@@ -221,6 +246,30 @@ export function resolveThrow(
     turnIndex: turnIndex,
     winner: survivingPlayer(state.players, pools),
   }
+}
+
+/**
+ * The whole bowl, when it is holding one of every value a die keeps.
+ *
+ * Nothing else in it and nothing missing from it: five dice reading one, two,
+ * three, four and five. Counted by the values present rather than by sorting
+ * them, since a bowl of exactly five dice covering five different values has
+ * no room to repeat one.
+ * @param dice - The bowl, with the sixes already taken out of it
+ * @returns The identifiers of every die in the bowl, or none if it is no flush
+ */
+function flushDice(dice: DieSnapshot[]): string[] {
+  if (dice.length !== FLUSH_FACES.length) {
+    return []
+  }
+
+  const faces = new Set(dice.map((die) => die.face))
+
+  if (!FLUSH_FACES.every((face) => faces.has(face))) {
+    return []
+  }
+
+  return dice.map((die) => die.id)
 }
 
 /**
