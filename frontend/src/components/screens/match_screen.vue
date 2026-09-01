@@ -840,14 +840,19 @@ onBeforeUnmount(() => {
           >
             <span class="rail__name">{{ player.name }}</span>
 
-            <!-- Counted all the way down, including the nought at the end of it.
-                 The struck-through name is what says a player is out; saying it
-                 twice would only take the last figure of the match away.
+            <!-- Counted while there is a hand to count. The nought at the end
+                 is the one figure worth nothing: the struck-through name has
+                 already said it, and a rail of them reads as a column of
+                 noughts rather than as the players still in.
 
                  Keyed on the count so the element is rebuilt whenever it changes,
                  which is what replays the flare. Dice leaving a hand and coming
                  back to it is the whole game, and it happens off screen. -->
-            <span :key="handOf(player)" class="rail__hand">{{ handOf(player) }}</span>
+            <span
+              v-if="!isOut(player)"
+              :key="handOf(player)"
+              class="rail__hand"
+            >{{ handOf(player) }}</span>
           </li>
         </ul>
       </header>
@@ -1186,8 +1191,16 @@ onBeforeUnmount(() => {
 }
 
 /* Kept on the rail rather than taken off it. Who is left is a fact about the
-   match, and a pill that quietly disappeared would take the answer with it. */
+   match, and a pill that quietly disappeared would take the answer with it.
+
+   Set after the players still in, which on a rail that packs to the right is
+   the right of it. The seats are otherwise in the order they play in, and that
+   order stops meaning anything the moment a seat is skipped — so the ones with
+   nothing left to throw are moved out of the run rather than left as gaps in
+   it. Ordered rather than sorted, so the list itself stays in play order for
+   anything reading it out. */
 .rail__player--out {
+    order: 1;
     background: rgb(14 18 16 / 35%);
 }
 
