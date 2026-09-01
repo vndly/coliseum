@@ -13,7 +13,7 @@ import type {DocumentReference, Unsubscribe} from 'firebase/firestore'
 import {createMatchCode} from '@/match/codes'
 import {currentPlayerId, firestore} from '@/match/firebase'
 import {parseMatchState, parseThrowRecord} from '@/match/match_state'
-import type {MatchState, ThrowRecord} from '@/match/match_state'
+import type {MatchPlayer, MatchState, ThrowRecord} from '@/match/match_state'
 import {STARTING_POOL, nextActivePlayer, resolveThrow, shuffledPlayers} from '@/match/rules'
 import {createOpeningDie} from '@/scene/die_state'
 import type {DieSnapshot, ThrownDie} from '@/scene/die_state'
@@ -74,12 +74,36 @@ export class MatchClient {
    * The code is drawn and then claimed by a write that refuses to overwrite,
    * rather than searched for and then taken — between a search and a write,
    * somebody else can have taken it.
+   *
+   * Bots fill every other seat, so a match given them is full the moment it is
+   * written and starts in the same breath — the opening die placed and the
+   * order of play drawn, which is the work the last player to arrive would
+   * otherwise do. Nothing is left for anyone to join, and nothing lists it:
+   * the lobby offers seats in matches still waiting, and this one never waits.
    * @param name - What to call this player
    * @param playerCount - How many seats the match has, including this one
+   * @param bots - The seats nobody is sitting behind, or none for a match between people
    * @returns The code the match can be joined by
    */
-  static async create(name: string, playerCount: number): Promise<string> {
+  static async create(name: string, playerCount: number, bots: MatchPlayer[]): Promise<string> {
     const playerId = await currentPlayerId()
+
+    const seats: MatchPlayer[] = [
+      {
+        uid: playerId,
+        name: name,
+        bot: false,
+      },
+      ...bots,
+    ]
+
+    const pools: Record<string, number> = {}
+
+    for (const seat of seats) {
+      pools[seat.uid] = STARTING_POOL
+    }
+
+    const started = seats.length === playerCount
 
     for (let attempt = 0; attempt < CODE_ATTEMPTS; attempt++) {
       const code = createMatchCode()
@@ -94,23 +118,21 @@ export class MatchClient {
 
         transaction.set(reference, {
           playerCount: playerCount,
-          phase: 'lobby',
-          players: [
-            {
-              uid: playerId,
-              name: name,
-            },
-          ],
-          pools: {
-            [playerId]: STARTING_POOL,
-          },
+          phase: started ? 'playing' : 'lobby',
+          players: started ? shuffledPlayers(seats) : seats,
+          pools: pools,
           turnIndex: 0,
           hasThrown: false,
-          bowl: [],
+          bowl: started ? [createOpeningDie()] : [],
           throwSeq: 0,
           verdict: null,
           winner: null,
-          bowlVersion: 0,
+
+          // The bowl has been written once when the opening die is in it, and
+          // never when it is not — the same count the join that starts a match
+          // between people leaves behind
+          bowlVersion: started ? 1 : 0,
+
           createdAt: serverTimestamp(),
         })
 
@@ -162,11 +184,12 @@ export class MatchClient {
         throw new Error('That match is full.')
       }
 
-      const players = [
+      const players: MatchPlayer[] = [
         ...state.players,
         {
           uid: playerId,
           name: name,
+          bot: false,
         },
       ]
 
@@ -274,15 +297,32 @@ export class MatchClient {
    * everyone watching sees the count drop as the dice leave rather than four
    * seconds later. What comes back from a group is added when the verdict is
    * written, on top of a hand this has already emptied.
+   *
+   * The hand it is charged to is named rather than assumed. This browser also
+   * throws for the bots in a match it started, and those dice come out of the
+   * bot's hand — the throw is recorded under the seat that made it, which is
+   * what every other player reads it as.
    * @param seq - This throw's number, which every die of it is named after
    * @param dice - Every die of the throw, as this player described them
+   * @param thrower - The seat the throw is made from, this player's own or a bot's
    */
-  async submitThrow(seq: number, dice: ThrownDie[]): Promise<void> {
+  async submitThrow(seq: number, dice: ThrownDie[], thrower: string): Promise<void> {
+    // Noted as already handed to the scene, because it has been: these dice
+    // were thrown here the moment the gesture finished, and the record coming
+    // back through the listener must not throw them a second time. Noted here
+    // rather than left to the identifier on the record, which names the seat
+    // and not the browser — a bot's throw is recorded under the bot. Noted
+    // before the write rather than after it, because the write reaches the
+    // local cache, and the listener with it, before the commit answers.
+    const marked = this.appliedThrow
+
+    this.appliedThrow = Math.max(this.appliedThrow, seq)
+
     const batch = writeBatch(firestore)
 
     batch.set(doc(this.reference, THROWS, String(seq)), {
       seq: seq,
-      uid: this.playerId,
+      uid: thrower,
       dice: dice.map((die) => ({
         id: die.id,
         origin: die.launch.origin,
@@ -295,10 +335,20 @@ export class MatchClient {
     batch.update(this.reference, {
       throwSeq: seq,
       hasThrown: true,
-      [`pools.${this.playerId}`]: increment(-dice.length),
+      [`pools.${thrower}`]: increment(-dice.length),
     })
 
-    await batch.commit()
+    try {
+      await batch.commit()
+    } catch (reason: unknown) {
+      // The throw never landed, so the number it was given is free again and
+      // the next player to reach for one takes it. The mark goes back with it:
+      // left standing, it would name somebody else's throw as already made
+      // here, and that player's dice would appear rather than fly.
+      this.appliedThrow = marked
+
+      throw reason
+    }
   }
 
   /**
@@ -316,8 +366,13 @@ export class MatchClient {
    * the one that counts, and the rest find the work already done.
    * @param seq - The throw that has just finished
    * @param atRest - Every die in the bowl as it stopped, from this player's own table
+   * @param thrower - The seat this browser threw from, or null when it is judging for somebody else
    */
-  async submitVerdict(seq: number, atRest: DieSnapshot[]): Promise<void> {
+  async submitVerdict(
+    seq: number,
+    atRest: DieSnapshot[],
+    thrower: string | null,
+  ): Promise<void> {
     await runTransaction(firestore, async (transaction) => {
       const snapshot = await transaction.get(this.reference)
       const state = parseMatchState(this.code, snapshot.data())
@@ -339,8 +394,12 @@ export class MatchClient {
       // again — but a player who has left the table cannot choose, and only
       // they could pass. The turn is handed on for them, or the bowl is rescued
       // and the match still never moves.
-      const thrower = state.players[state.turnIndex]
-      const contested = thrower === undefined || thrower.uid !== this.playerId
+      //
+      // Measured against the seat this browser threw from rather than against
+      // the browser itself, so that a bot it is playing keeps the choice its
+      // own strategy is about to make.
+      const seated = state.players[state.turnIndex]
+      const contested = seated === undefined || seated.uid !== thrower
       const turnIndex = contested && outcome.turnIndex === state.turnIndex
         ? nextActivePlayer(state.players, outcome.pools, state.turnIndex)
         : outcome.turnIndex

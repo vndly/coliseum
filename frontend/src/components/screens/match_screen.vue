@@ -9,6 +9,8 @@
 import {computed, onBeforeUnmount, onMounted, ref, shallowRef, useTemplateRef, watch} from 'vue'
 import {onBeforeRouteLeave, useRoute, useRouter} from 'vue-router'
 import DieFace from '@/components/die_face.vue'
+import {nextBotMove} from '@/match/bots'
+import type {BotMove} from '@/match/bots'
 import {MatchClient} from '@/match/match_client'
 import type {MatchPlayer, MatchState, ThrowRecord} from '@/match/match_state'
 import {nextActivePlayer, poolSize, throwSize} from '@/match/rules'
@@ -38,18 +40,31 @@ const TAKEOVER_MILLISECONDS = 5000
 /** How long a turn is called for before the call fades and the table is let go. */
 const TURN_CALL_MILLISECONDS = 1500
 
+/**
+ * How long a bot is left to think, at its quickest and its slowest.
+ *
+ * Long enough that the call naming the seat has been read and whatever the
+ * last throw came to has been seen, and drawn afresh for every move rather
+ * than fixed: a table of five bots on one timer moves like a metronome, which
+ * is the one thing that would give away that nobody is sitting at it.
+ */
+const BOT_PAUSE_MINIMUM = 600 // Milliseconds
+const BOT_PAUSE_MAXIMUM = 1400
+
 // None of these are refs: the scene mutates every frame and must stay out of
 // reactivity, and the client and the counters are only ever read from callbacks
 // that already know when they changed
 let scene: DishScene | null = null
 let client: MatchClient | null = null
 let pendingSeq = 0 // The throw made here that is waiting to come to rest
+let pendingThrower = '' // The seat that throw was made from, which is a bot's on a bot's turn
 let pendingThrow: Promise<void> = Promise.resolve() // That throw's own write, still in flight
 let awaitingSeq = 0 // Somebody else's throw that has stopped and not yet been judged
 let takeoverTimer = 0 // The pending offer to judge it for them, so it can be called off
 let appliedBowlVersion = -1 // The last bowl handed to the scene; -1 so the opening one lands
 let copiedTimer = 0 // The pending reset of the copy button, so it can be called off
 let turnCallTimer = 0 // The pending end of the turn call, so it can be called off
+let botTimer = 0 // The pending move of the bot whose turn it is, so it can be called off
 let leaveAllowed = false // Set by every departure made here, so the guard lets those through
 
 const state = shallowRef<MatchState | null>(null)
@@ -102,7 +117,7 @@ const judged = computed<boolean>(() => {
 })
 
 const eliminated = computed<boolean>(
-  () => !inLobby.value && uid.value !== '' && judged.value && myPool.value <= 0,
+  () => !inLobby.value && uid.value !== '' && isSpent(uid.value),
 )
 
 /** How many dice the next gesture on the canvas is to put in the air. */
@@ -164,6 +179,56 @@ const canThrow = computed<boolean>(
     && myPool.value > 0,
 )
 
+/** The seat playing now, when there is nobody sitting behind it. */
+const activeBot = computed<MatchPlayer | null>(() => {
+  const player = activePlayer.value
+
+  return player !== null && player.bot ? player : null
+})
+
+/**
+ * What the bot whose turn it is does next, or null when no bot is waiting on
+ * this browser.
+ *
+ * Held off by the same things that close the player's own controls, and for
+ * the same reasons: a throw or a pass landing while the dice are still moving,
+ * while the verdict is still being written, or while the turn is still being
+ * called would be answered against a bowl the match has not finished with.
+ */
+const botMove = computed<BotMove | null>(() => {
+  const match = state.value
+  const player = activeBot.value
+
+  if (match === null || player === null || !playing.value) {
+    return null
+  }
+
+  if (busy.value || resolving.value || calling.value || !judged.value) {
+    return null
+  }
+
+  return nextBotMove(match, player.uid)
+})
+
+/**
+ * The bot move now due, named so that one is told apart from the next.
+ *
+ * A watcher on the move alone would sit still through a row of them: two bots
+ * passing in turn is the same answer twice, and nothing would fire the second.
+ * Everything that makes this a different decision from the last one is in the
+ * name.
+ */
+const botTurnKey = computed<string | null>(() => {
+  const match = state.value
+  const move = botMove.value
+
+  if (match === null || move === null) {
+    return null
+  }
+
+  return `${match.turnIndex}:${match.throwSeq}:${String(match.hasThrown)}:${move}`
+})
+
 const canPass = computed<boolean>(
   () => playing.value
     && isMyTurn.value
@@ -206,6 +271,21 @@ const winnerLine = computed<string>(() => {
 
   return `${match.players.find((player) => player.uid === match.winner)?.name ?? 'Someone'} wins`
 })
+
+/**
+ * Whether the card that waits for players stands over the table.
+ *
+ * The match answers this for itself the moment it arrives: a lobby is waiting
+ * and anything else is not, which is why a match against bots — written
+ * straight into play, and joinable by nobody — never shows it. Before it
+ * arrives there is nothing to read the answer off, and the card would be
+ * offering a code to invite people into a match that has no room for any. So
+ * the one thing this browser already knows is carried on the address and
+ * answers that window alone; from the first read on, the phase decides.
+ */
+const showWaiting = computed<boolean>(
+  () => inLobby.value && (state.value !== null || route.query.bots !== '1'),
+)
 
 const seatsTaken = computed<number>(() => state.value?.players.length ?? 0)
 const seatsTotal = computed<number>(() => state.value?.playerCount ?? 0)
@@ -255,6 +335,23 @@ watch(settledTurn, (seat) => {
   turnCallTimer = window.setTimeout(() => {
     calling.value = false
   }, TURN_CALL_MILLISECONDS)
+})
+
+// A bot is given a moment before it moves. Cleared on every change rather than
+// only on a new turn: anything that takes the decision away — the player's own
+// throw landing first, the match ending — leaves a timer that would otherwise
+// fire into a match that has moved on, and the move it was drawn for is
+// recomputed from the state it arrives at anyway.
+watch(botTurnKey, (key) => {
+  window.clearTimeout(botTimer)
+
+  if (key === null) {
+    return
+  }
+
+  const pause = BOT_PAUSE_MINIMUM + Math.random() * (BOT_PAUSE_MAXIMUM - BOT_PAUSE_MINIMUM)
+
+  botTimer = window.setTimeout(runBotTurn, pause)
 })
 
 function describe(reason: unknown): string {
@@ -369,8 +466,17 @@ function onThrow(record: ThrowRecord): void {
 function onLaunch(launches: ThrowLaunch[]): void {
   const match = state.value
   const connected = client
+  const player = activePlayer.value
 
-  if (match === null || connected === null || !canThrow.value) {
+  if (match === null || connected === null || player === null) {
+    return
+  }
+
+  // A gesture on the canvas is this player's own, and a throw with nobody's
+  // hand on it belongs to the bot the turn is sitting on. Either way the seat
+  // that made it is the seat whose turn it is, and neither is let through
+  // unless that turn is genuinely open.
+  if (!canThrow.value && botMove.value !== 'throw') {
     return
   }
 
@@ -381,10 +487,11 @@ function onLaunch(launches: ThrowLaunch[]): void {
   }))
 
   pendingSeq = seq
+  pendingThrower = player.uid
   busy.value = true
   scene?.applyThrow(dice)
 
-  const submitted = connected.submitThrow(seq, dice)
+  const submitted = connected.submitThrow(seq, dice, player.uid)
 
   pendingThrow = submitted
 
@@ -414,6 +521,7 @@ function onSettled(): void {
 
   if (busy.value) {
     const seq = pendingSeq
+    const thrower = pendingThrower
 
     busy.value = false
 
@@ -421,7 +529,7 @@ function onSettled(): void {
     // verdict is refused by a match that has not heard of the throw yet, and
     // over a slow connection the dice can stop before that write has landed.
     pendingThrow
-      .then(() => connected.submitVerdict(seq, bowl))
+      .then(() => connected.submitVerdict(seq, bowl, thrower))
       .catch((reason: unknown) => {
         error.value = describe(reason)
       })
@@ -468,9 +576,43 @@ function runTakeover(): void {
     return
   }
 
-  connected.submitVerdict(awaitingSeq, scene?.bowlSnapshot ?? []).catch((reason: unknown) => {
+  // Nobody here threw this one, so the turn is handed on for whoever did
+  connected.submitVerdict(awaitingSeq, scene?.bowlSnapshot ?? [], null).catch((reason: unknown) => {
     error.value = describe(reason)
   })
+}
+
+/**
+ * Plays the turn of a seat nobody is sitting behind.
+ *
+ * The whole of a bot is here and in the strategy it asks: it throws through
+ * the same scene the player throws through, and its throw and its pass are the
+ * same two writes any other player makes. What it is not is a second kind of
+ * turn — everything that judges the bowl afterwards reads it as the seat it
+ * was made from, and never knows the difference.
+ */
+function runBotTurn(): void {
+  const match = state.value
+  const connected = client
+  const player = activeBot.value
+  const move = botMove.value
+
+  // Drawn again rather than trusted from when the timer was set: anything at
+  // all can have arrived in the pause, and the move is only ever made on the
+  // match as it stands now
+  if (match === null || connected === null || player === null || move === null) {
+    return
+  }
+
+  if (move === 'pass') {
+    connected.pass(match).catch((reason: unknown) => {
+      error.value = describe(reason)
+    })
+
+    return
+  }
+
+  scene?.throwUnaimed(throwSize(match, player.uid))
 }
 
 function onPass(): void {
@@ -520,6 +662,30 @@ function onLeave(): void {
 }
 
 /**
+ * Whether a hand of nothing is a player out of the match, rather than one whose
+ * dice are still in the air.
+ *
+ * A hand is charged the moment its dice leave it and paid back only when the
+ * throw is judged, so an empty hand mid-throw is a real and temporary reading —
+ * but it is only ever the thrower's. Everybody else at the table is holding
+ * exactly what they were holding before, so their nought means what it always
+ * means. Testing the whole table on the throw, which is what waiting for the
+ * verdict alone does, takes the mark off every player who is genuinely out for
+ * as long as anybody is throwing.
+ * @param player - The identifier to judge
+ * @returns Whether they are out of the match
+ */
+function isSpent(player: string): boolean {
+  const match = state.value
+
+  if (match === null || poolSize(match, player) > 0) {
+    return false
+  }
+
+  return judged.value || player !== activePlayer.value?.uid
+}
+
+/**
  * How many dice a player is holding, for the rail.
  * @param player - The seat to count
  * @returns Their hand, which is zero once they are out
@@ -534,10 +700,10 @@ function handOf(player: MatchPlayer): number {
  * Whether a player is out of the match, rather than merely empty-handed for as
  * long as their own dice are in the air.
  * @param player - The seat to test
- * @returns Whether their hand is empty and the throw that emptied it has been judged
+ * @returns Whether their hand is empty and that emptiness is theirs to keep
  */
 function isOut(player: MatchPlayer): boolean {
-  return judged.value && handOf(player) <= 0
+  return isSpent(player.uid)
 }
 
 async function connect(): Promise<void> {
@@ -595,6 +761,7 @@ onBeforeUnmount(() => {
   window.clearTimeout(copiedTimer)
   window.clearTimeout(takeoverTimer)
   window.clearTimeout(turnCallTimer)
+  window.clearTimeout(botTimer)
   client?.dispose()
   client = null
   scene?.dispose()
@@ -618,7 +785,7 @@ onBeforeUnmount(() => {
          Hidden rather than dropped while the question about leaving is up: it
          is the wait that decides which chrome exists, and the two scrims over
          one another only muddy the card that is being answered. -->
-    <div v-if="inLobby" v-show="!showLeave" class="waiting">
+    <div v-if="showWaiting" v-show="!showLeave" class="waiting">
       <div class="waiting__card">
         <p class="label">Match code</p>
 
@@ -673,16 +840,14 @@ onBeforeUnmount(() => {
           >
             <span class="rail__name">{{ player.name }}</span>
 
-            <!-- A player out of the match is named rather than counted, because
-                 a nought is a real and temporary reading: a hand is charged as
-                 its dice leave, so anyone mid-throw is holding none of them.
-                 Counted until the throw is judged, named once it is. -->
-            <span v-if="isOut(player)" class="rail__gone">Out</span>
+            <!-- Counted all the way down, including the nought at the end of it.
+                 The struck-through name is what says a player is out; saying it
+                 twice would only take the last figure of the match away.
 
-            <!-- Keyed on the count so the element is rebuilt whenever it changes,
+                 Keyed on the count so the element is rebuilt whenever it changes,
                  which is what replays the flare. Dice leaving a hand and coming
                  back to it is the whole game, and it happens off screen. -->
-            <span v-else :key="handOf(player)" class="rail__hand">{{ handOf(player) }}</span>
+            <span :key="handOf(player)" class="rail__hand">{{ handOf(player) }}</span>
           </li>
         </ul>
       </header>
@@ -1018,13 +1183,6 @@ onBeforeUnmount(() => {
         color: var(--brass);
         text-shadow: none;
     }
-}
-
-.rail__gone {
-    font: var(--plate);
-    letter-spacing: var(--plate-tracking);
-    text-transform: uppercase;
-    color: var(--bone-faint);
 }
 
 /* Kept on the rail rather than taken off it. Who is left is a fact about the

@@ -4,6 +4,7 @@ import type {AimPreview} from '@/scene/aim_preview'
 import type {ThrowLaunch} from '@/scene/die_state'
 import type {PhysicsWorld} from '@/scene/physics_world'
 import {AIM_DOT_COUNT,
+  BOWL_INTERIOR_FLOOR_HEIGHT,
   CAMERA_FAR,
   DIE_LAUNCH_SPIN,
   GRAVITY,
@@ -14,7 +15,11 @@ import {AIM_DOT_COUNT,
   THROW_FLIGHT_TIME,
   THROW_LAUNCH_CAMERA_MARGIN,
   THROW_MAX_RADIUS,
-  THROW_MIN_DRAG} from '@/scene/dimensions'
+  THROW_MIN_DRAG,
+  UNAIMED_BEARING_SPREAD,
+  UNAIMED_DRAG_MAXIMUM,
+  UNAIMED_DRAG_MINIMUM,
+  UNAIMED_TARGET_RADIUS} from '@/scene/dimensions'
 
 // The whole of PointerEvent.buttons while a throw is being aimed: the left
 // mouse button, a finger in contact, or a pen tip. Anything else in the mask
@@ -131,6 +136,64 @@ export class ThrowController {
     this.count = Math.max(count, 1)
   }
 
+  /**
+   * Throws with nobody's hand on it.
+   *
+   * The two ends of the gesture are drawn instead of pointed at — somewhere on
+   * the inside base for the die to land on, and a spot on the table at a
+   * random bearing and distance for it to be thrown from — and everything
+   * after that is the path a drag takes. The same lift, the same clearance,
+   * the same speed for a line of that length, and the same chance of catching
+   * the rim and putting a die on the floor: a throw made this way is worth
+   * neither more nor less than one somebody aimed.
+   *
+   * The count is passed rather than set, because the seat this throws for is
+   * not the seat the gesture is armed for — the whole hand it puts in the air
+   * belongs to somebody else at the table.
+   * @param count - How many dice the throw puts in the air
+   */
+  throwUnaimed(count: number): void {
+    // Not the square root that would spread the draw evenly over the disc:
+    // that puts most of the dice out at the edge of it, and the middle is
+    // where a die stays in the bowl. Straight off the radius crowds them in.
+    const landing = Math.random() * UNAIMED_TARGET_RADIUS
+    const landingAngle = Math.random() * Math.PI * 2
+
+    this.targetPoint.set(
+      Math.cos(landingAngle) * landing,
+      BOWL_INTERIOR_FLOOR_HEIGHT,
+      Math.sin(landingAngle) * landing,
+    )
+
+    const drag = UNAIMED_DRAG_MINIMUM
+      + Math.random() * (UNAIMED_DRAG_MAXIMUM - UNAIMED_DRAG_MINIMUM)
+
+    // Drawn from the far side of the bowl rather than from anywhere around it.
+    // Where the line begins is what decides whether the lift steepens it or
+    // flattens it, and only one side of the table steepens it — see the
+    // spread's own note. Read off the camera each time, because the player is
+    // free to orbit between one throw and the next.
+    const dragAngle = Math.atan2(this.camera.position.z, this.camera.position.x)
+      + Math.PI
+      + (Math.random() * 2 - 1) * UNAIMED_BEARING_SPREAD
+
+    this.launchGround.set(
+      this.targetPoint.x + Math.cos(dragAngle) * drag,
+      0,
+      this.targetPoint.z + Math.sin(dragAngle) * drag,
+    )
+
+    // Pulled back inside the reach a drag has, exactly as a drag is. Nothing
+    // drawn above reaches that far — the widest is the target's radius and the
+    // longest drag together — so this is what holds if either figure is ever
+    // opened up, and does nothing until then.
+    this.clampToThrowRadius(this.launchGround)
+
+    if (this.buildLaunch(count)) {
+      this.launch(this.describeLaunches(count))
+    }
+  }
+
   dispose(): void {
     this.cancel()
     this.downPointers.clear()
@@ -233,8 +296,8 @@ export class ThrowController {
     if (this.projectToTable(event, this.launchGround)) {
       this.clampToThrowRadius(this.launchGround)
 
-      if (this.buildLaunch()) {
-        this.launch(this.describeLaunches())
+      if (this.buildLaunch(this.count)) {
+        this.launch(this.describeLaunches(this.count))
       }
     }
 
@@ -357,9 +420,10 @@ export class ThrowController {
   /**
    * Works out where the die would be launched from, and how fast, for the line
    * as it currently stands.
+   * @param count - How many dice the throw puts in the air, which sets the clearance
    * @returns Whether the line is long enough to be a throw at all
    */
-  private buildLaunch(): boolean {
+  private buildLaunch(count: number): boolean {
     // Measured across the ground rather than along the line, because the line
     // is never shorter than the launch height and a bare click would clear any
     // dead zone stated in three dimensions
@@ -385,7 +449,7 @@ export class ThrowController {
     // flat, so every die of it sits at the launch's own height, and a launch
     // that clears the bowl by the ring's radius carries the whole fan over.
     const radius = Math.hypot(this.launchOrigin.x, this.launchOrigin.z)
-    const clearance = this.count > 1
+    const clearance = count > 1
       ? THROW_CLEARANCE_RADIUS + THROW_FAN_RADIUS
       : THROW_CLEARANCE_RADIUS
 
@@ -419,15 +483,16 @@ export class ThrowController {
    * Every die of a fan is given the same velocity. What separates them is where
    * they start and how they are turning, which is enough: they arrive as a
    * loose group, and what a bowl full of dice does to itself does the rest.
+   * @param count - How many dice the throw puts in the air
    * @returns The throw, ready both to be sent and to be made
    */
-  private describeLaunches(): ThrowLaunch[] {
+  private describeLaunches(count: number): ThrowLaunch[] {
     const launches: ThrowLaunch[] = []
 
-    for (let index = 0; index < this.count; index++) {
+    for (let index = 0; index < count; index++) {
       const orientation = ThrowController.randomOrientation()
       const spin = ThrowController.randomSpin()
-      const offset = ThrowController.fanOffset(index, this.count)
+      const offset = ThrowController.fanOffset(index, count)
 
       launches.push({
         origin: [
@@ -563,7 +628,7 @@ export class ThrowController {
    * throw nothing.
    */
   private updatePreview(): void {
-    if (!this.buildLaunch()) {
+    if (!this.buildLaunch(this.count)) {
       this.preview.hide()
 
       return

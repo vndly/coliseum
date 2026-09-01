@@ -12,6 +12,7 @@
 import {computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch} from 'vue'
 import {useRoute, useRouter} from 'vue-router'
 import DieFace from '@/components/die_face.vue'
+import {createBots} from '@/match/bots'
 import {isMatchCode, normaliseMatchCode} from '@/match/codes'
 import {watchPlayerId} from '@/match/firebase'
 import {MatchClient} from '@/match/match_client'
@@ -47,6 +48,11 @@ const openMatches = ref<OpenMatch[]>([])
 // is happening.
 const seatingCode = ref('')
 
+// Which of the two ways into a new match was pressed. The pair are answered
+// the same way the list above is: the whole screen goes quiet, and only the
+// control that was actually pressed says what is happening.
+const pressed = ref<'none' | 'match' | 'bots'>('none')
+
 // The identity this browser already has, if it has one. Only ever to mark a
 // player's own match in the list — a browser that has never taken a seat has
 // none, and is not given one for the sake of a label.
@@ -79,6 +85,9 @@ const canTakeSeat = computed<boolean>(() => trimmedName.value.length > 0 && !bus
 // wait on the same flag, but "Creating…" is the button's account of its own
 // press and would be a lie about a seat being taken out of the list.
 const formBusy = computed<boolean>(() => busy.value && seatingCode.value === '')
+
+const creatingMatch = computed<boolean>(() => formBusy.value && pressed.value === 'match')
+const startingBots = computed<boolean>(() => formBusy.value && pressed.value === 'bots')
 
 /**
  * The name this browser last played under.
@@ -182,23 +191,42 @@ function chooseMode(next: 'create' | 'join'): void {
   }
 }
 
-async function runCreate(): Promise<void> {
+/**
+ * Starts a match and goes to it.
+ *
+ * The bots are drawn here rather than inside the client, because they are the
+ * whole of what separates the two buttons: seats nobody is coming to fill. A
+ * match given them is full the moment it is written and begins on the spot; a
+ * match without them is a lobby, waiting.
+ * @param withBots - Whether every seat but this player's is taken by a bot
+ */
+async function runCreate(withBots: boolean): Promise<void> {
   busy.value = true
+  pressed.value = withBots ? 'bots' : 'match'
   error.value = ''
   rememberName(trimmedName.value)
 
   try {
-    const created = await MatchClient.create(trimmedName.value, playerCount.value)
+    const bots = withBots ? createBots(playerCount.value - 1, trimmedName.value) : []
+    const created = await MatchClient.create(trimmedName.value, playerCount.value, bots)
 
     await router.push({
       name: 'match',
       params: {
         code: created,
       },
+
+      // Carried so the match's own screen knows what it is before it has read
+      // it. The card that waits for players stands over the table from the
+      // first frame, and there is nobody to wait for in this one.
+      query: withBots ? {
+        bots: '1',
+      } : undefined,
     })
   } catch (reason: unknown) {
     error.value = describe(reason)
     busy.value = false
+    pressed.value = 'none'
   }
 }
 
@@ -216,6 +244,7 @@ async function runCreate(): Promise<void> {
  */
 async function takeSeat(match: string): Promise<string> {
   busy.value = true
+  pressed.value = 'none'
   rememberName(trimmedName.value)
 
   try {
@@ -363,7 +392,11 @@ async function runPaste(): Promise<void> {
 }
 
 function onCreate(): void {
-  void runCreate()
+  void runCreate(false)
+}
+
+function onPlayBots(): void {
+  void runCreate(true)
 }
 
 function onJoin(): void {
@@ -495,15 +528,31 @@ function onPaste(): void {
               </div>
             </div>
 
-            <button
-              type="submit"
-              class="action"
-              :class="{'action--busy': formBusy}"
-              :disabled="!canCreate"
-              @click="onCreate"
-            >
-              {{ formBusy ? 'Creating…' : 'Create match' }}
-            </button>
+            <!-- Two ways to start the same match, side by side rather than
+                 stacked: the dice above are stood to the height of the code
+                 field so that swapping the halves of the card never moves this
+                 row, and a second button under the first would undo that. -->
+            <div class="actions">
+              <button
+                type="submit"
+                class="action"
+                :class="{'action--busy': creatingMatch}"
+                :disabled="!canCreate"
+                @click="onCreate"
+              >
+                {{ creatingMatch ? 'Creating…' : 'Create match' }}
+              </button>
+
+              <button
+                type="button"
+                class="action action--quiet"
+                :class="{'action--busy': startingBots}"
+                :disabled="!canCreate"
+                @click="onPlayBots"
+              >
+                {{ startingBots ? 'Starting…' : 'Play with bots' }}
+              </button>
+            </div>
           </template>
 
           <template v-else>
@@ -865,6 +914,16 @@ function onPaste(): void {
     box-shadow: 0 0 0 2px var(--brass);
 }
 
+/* The pair share the row evenly: neither is the afterthought, and a label as
+   long as the second one's needs the whole half. They fall into a column only
+   where half a card is too narrow to hold one — a phone turned the short way,
+   which is the one place the row would break a word instead. */
+.actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+    gap: 0.5rem;
+}
+
 .action {
     padding: 0.8125rem;
     border: 0;
@@ -885,6 +944,26 @@ function onPaste(): void {
     background: var(--brass-glow);
     color: var(--bone-faint);
     cursor: not-allowed;
+}
+
+/* The other way in, and the quieter one. Sunk into the panel like the wells
+   the fields are cut into — the same treatment the match screen gives a second
+   answer — so the two read as one choice with a default rather than as two
+   presses of equal weight. Rimmed by an inset shadow rather than a border,
+   which would make it a pixel taller than the button beside it. */
+.action--quiet {
+    background: var(--well);
+    color: var(--bone-dim);
+    box-shadow: inset 0 0 0 1px var(--brass-edge);
+}
+
+.action--quiet:hover:not(:disabled) {
+    color: var(--bone);
+}
+
+.action--quiet:disabled {
+    background: var(--well);
+    color: var(--bone-faint);
 }
 
 /* Pressed and waiting, rather than not yet ready. The surface sinks to the same

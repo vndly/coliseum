@@ -209,6 +209,20 @@ export class DishScene {
     this.throwController.throwCount = count
   }
 
+  /**
+   * Throws for a seat nobody is aiming for, drawing the gesture rather than
+   * being given one.
+   *
+   * It leaves by the same door a gesture does: the throw is described here,
+   * handed up through onLaunch, and only made once it comes back — which is
+   * what keeps one path through this class for every throw in the match,
+   * whoever or whatever made it.
+   * @param count - How many dice the throw puts in the air
+   */
+  throwUnaimed(count: number): void {
+    this.throwController.throwUnaimed(count)
+  }
+
   /** How many dice are in the bowl, which is what DIE_LIMIT is measured against. */
   get dieCount(): number {
     return this.dice.count

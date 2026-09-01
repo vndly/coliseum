@@ -534,6 +534,48 @@ export const THROW_MAX_RADIUS = 8
  */
 export const THROW_FAN_RADIUS = DIE_SIZE * 1.2
 
+/**
+ * How far from the bowl's axis a throw nobody aimed may land.
+ *
+ * Well inside the flat part of the inside base rather than the whole of it. A
+ * die that arrives near the edge of the floor is a die whose first bounce is
+ * into the rising wall, and the wall is what throws it back out over the bead;
+ * one that lands centrally spends the same bounce on the floor and the far
+ * side. The aim still varies within this, so a table of them does not stack
+ * every die in one spot — it is a hand that throws well, not one that throws
+ * the same throw twice.
+ */
+export const UNAIMED_TARGET_RADIUS = BOWL_INTERIOR_FLOOR_RADIUS * 0.45
+
+/**
+ * How long the line behind a throw nobody aimed is, at its shortest and its
+ * longest.
+ *
+ * The line's length is the speed of the throw, so this is the range of force
+ * one comes out with. Kept well clear of THROW_MIN_DRAG at the bottom, so no
+ * draw of it ever falls inside the dead zone and throws nothing, and short of
+ * the hardest a hand can throw at the top: the harder a die arrives the
+ * further it climbs the wall on the bounce, and the whole point of an aim
+ * nobody is watching is that it keeps its dice in the bowl.
+ */
+export const UNAIMED_DRAG_MINIMUM = 3
+export const UNAIMED_DRAG_MAXIMUM = 4.5
+
+/**
+ * How far off the far side of the bowl a throw nobody aimed may be drawn from.
+ *
+ * The bearing is not free, because the launch is lifted back along the
+ * camera's own ray: a line drawn from the camera's side of the bowl is pushed
+ * further out as it climbs, and arrives flatter than the angle it asked for —
+ * flat enough, with the camera orbited low, to meet the outside of the near
+ * wall rather than clear the bead. Drawn from the far side the same lift
+ * shortens the line and steepens the drop, so the die comes down into the
+ * bowl. This is how much of the circle either side of straight-away is still
+ * allowed, which is enough that no two throws come from the same place and
+ * little enough that none of them comes from behind the camera.
+ */
+export const UNAIMED_BEARING_SPREAD = Math.PI / 3 // 60° either way
+
 // ============================================
 // Aim preview
 // ============================================

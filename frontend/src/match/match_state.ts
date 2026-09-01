@@ -17,6 +17,17 @@ export type MatchPhase = 'lobby' | 'playing' | 'finished'
 export interface MatchPlayer {
   uid: string
   name: string
+
+  /**
+   * Whether nobody is sitting behind this seat.
+   *
+   * A bot is a seat like any other — it holds dice, it takes its turn, it is
+   * eliminated by running out — and everything in the rules reads it without
+   * knowing. What it is for is the one browser in the match: a bot's turns are
+   * played by whoever started it, and this is how that browser tells the seats
+   * it has to play from the one it is sitting in.
+   */
+  bot: boolean
 }
 
 export interface MatchState {
@@ -339,6 +350,11 @@ function readPlayers(value: unknown): MatchPlayer[] | null {
     players.push({
       uid: uid,
       name: name,
+
+      // Read leniently, like the flag that says a turn has had a throw:
+      // a seat is a person unless the document says otherwise, and matches
+      // written before there were bots say nothing at all
+      bot: entry.bot === true,
     })
   }
 
