@@ -5,7 +5,6 @@
 - Run apocalypse review
 - Allow to throw die with one click
 - Configure how many dice per player
-- Configure die color/skins
 - Tournament
   - Points
     - 1 point per win
