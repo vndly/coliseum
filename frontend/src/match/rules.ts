@@ -11,12 +11,29 @@ import type {DieSnapshot, ThrowResolution} from '@/scene/die_state'
  * walks away before writing it.
  *
  * A die in the bowl belongs to nobody. It was thrown out of somebody's hand and
- * whoever pairs it takes it, which is why hands are counts rather than lists
- * and why the bowl carries no owner.
+ * whoever pairs it takes it, which is why the bowl carries no owner. What a
+ * hand does carry is the colour of every die in it: the paint outlives the
+ * hand, so a die won in a pair arrives in the colour whoever threw it painted
+ * it. Nothing below reads that colour — it is carried, counted and handed on,
+ * and never judged.
  */
 
 /** How many dice each player is given at the start of a match. */
 export const STARTING_POOL = 6
+
+/**
+ * The hand a player sits down with: their whole allowance, every die of it in
+ * the colour they chose.
+ *
+ * The only place in the game a colour is minted. Everything after this moves
+ * paint that already exists between hands and the bowl, so a colour a player
+ * never chose can only reach their hand by their winning it.
+ * @param color - The skin the player is playing in
+ * @returns Their opening hand
+ */
+export function startingHand(color: number): number[] {
+  return new Array<number>(STARTING_POOL).fill(color)
+}
 
 /**
  * The fewest and the most players a match can be made for.
@@ -54,7 +71,7 @@ const FLUSH_FACES = [
 export interface ThrowOutcome {
   resolution: ThrowResolution // What happened, in the order it is to be watched
   bowl: DieSnapshot[] // What is left in the bowl once it has all happened
-  pools: Record<string, number> // Every hand, with the thrower's group already in it
+  pools: Record<string, number[]> // Every hand, with the thrower's group already in it
   turnIndex: number // Who throws next; the thrower again, if they may throw again
   winner: string | null // Set the moment only one player still has dice
 }
@@ -66,7 +83,44 @@ export interface ThrowOutcome {
  * @returns Their hand, which is zero once they are out of the match
  */
 export function poolSize(state: MatchState, uid: string): number {
-  return state.pools[uid] ?? 0
+  return handOf(state, uid).length
+}
+
+/**
+ * What a player is holding, die by die, in the order they will be thrown.
+ * @param state - The match as it currently stands
+ * @param uid - The player to look at
+ * @returns The colour of every die in their hand, oldest first
+ */
+export function handOf(state: MatchState, uid: string): number[] {
+  return state.pools[uid] ?? []
+}
+
+/**
+ * Takes the next throw out of a hand, and says what is left.
+ *
+ * A hand is a queue: the dice a player started with are at the front, and
+ * anything they win goes to the back. Which die goes into the bowl is a purely
+ * cosmetic question — no rule anywhere reads a colour — so it is answered by
+ * the plainest order there is rather than by asking the player to pick paint
+ * mid-turn.
+ * @param state - The match as it currently stands
+ * @param uid - The player about to throw
+ * @param count - How many dice the throw puts in the air
+ * @returns The colours going into the bowl, and the hand left behind
+ */
+export function drawFromHand(
+  state: MatchState,
+  uid: string,
+  count: number,
+): {thrown: number[],
+  kept: number[]} {
+  const hand = handOf(state, uid)
+
+  return {
+    thrown: hand.slice(0, count),
+    kept: hand.slice(count),
+  }
 }
 
 /**
@@ -128,14 +182,14 @@ export function shuffledPlayers(players: MatchPlayer[]): MatchPlayer[] {
  */
 export function nextActivePlayer(
   players: MatchPlayer[],
-  pools: Record<string, number>,
+  pools: Record<string, number[]>,
   from: number,
 ): number {
   for (let step = 1; step <= players.length; step++) {
     const index = (from + step) % players.length
     const player = players[index]
 
-    if (player !== undefined && (pools[player.uid] ?? 0) > 0) {
+    if (player !== undefined && (pools[player.uid] ?? []).length > 0) {
       return index
     }
   }
@@ -153,12 +207,12 @@ export function nextActivePlayer(
  */
 export function survivingPlayer(
   players: MatchPlayer[],
-  pools: Record<string, number>,
+  pools: Record<string, number[]>,
 ): string | null {
   let survivor: string | null = null
 
   for (const player of players) {
-    if ((pools[player.uid] ?? 0) === 0) {
+    if ((pools[player.uid] ?? []).length === 0) {
       continue
     }
 
@@ -217,19 +271,27 @@ export function resolveThrow(
   const returned = flushed.length > 0 ? flushed : groupedDice(standing)
   const bowl = standing.filter((die) => !returned.includes(die.id))
 
-  const pools: Record<string, number> = {
+  const pools: Record<string, number[]> = {
     ...state.pools,
   }
 
+  // The dice go back in the paint they were thrown in, whoever threw them, and
+  // to the back of the hand they are going to. A pair won off somebody else is
+  // the only way a hand comes to hold a colour its player never chose.
   if (thrower !== undefined) {
-    pools[thrower.uid] = (pools[thrower.uid] ?? 0) + returned.length
+    const won = atRest.filter((die) => returned.includes(die.id)).map((die) => die.skin)
+
+    pools[thrower.uid] = [
+      ...pools[thrower.uid] ?? [],
+      ...won,
+    ]
   }
 
   // A group ends the turn, a flush ends it the same way, and so does having
   // thrown the last die in hand:
   // there is nothing left to throw again with, and the rules only offer the
   // choice to a player who still has one.
-  const spent = thrower === undefined || (pools[thrower.uid] ?? 0) === 0
+  const spent = thrower === undefined || (pools[thrower.uid] ?? []).length === 0
   const turnIndex = returned.length > 0 || spent
     ? nextActivePlayer(state.players, pools, state.turnIndex)
     : state.turnIndex

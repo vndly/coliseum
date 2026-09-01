@@ -19,16 +19,19 @@ import {MatchClient} from '@/match/match_client'
 import {watchOpenMatches} from '@/match/open_matches'
 import type {OpenMatch} from '@/match/open_matches'
 import {MAX_PLAYERS, MIN_PLAYERS} from '@/match/rules'
+import {BONE_SKIN, DIE_SKINS, dieSkin, isDieSkin} from '@/scene/die_skins'
 
 const CODE_LENGTH = 4
 const NAME_LIMIT = 16
 const NAME_KEY = 'coliseum.player-name' // Where the last name played under is kept
+const COLOR_KEY = 'coliseum.player-color' // And the colour played in, beside it
 
 const route = useRoute()
 const router = useRouter()
 
 const nameField = useTemplateRef<HTMLInputElement>('nameField')
 const codeField = useTemplateRef<HTMLInputElement>('codeField')
+const picker = useTemplateRef<HTMLElement>('picker')
 
 // Neither is a ref: both are only ever the call that ends a subscription
 let stopWatchingMatches: (() => void) | null = null
@@ -36,6 +39,8 @@ let stopWatchingPlayer: (() => void) | null = null
 
 const mode = ref<'create' | 'join'>('create')
 const playerName = ref('')
+const playerColor = ref(BONE_SKIN)
+const picking = ref(false) // Whether the colours are open under the button
 const playerCount = ref(MIN_PLAYERS)
 const code = ref('')
 const busy = ref(false)
@@ -69,6 +74,7 @@ const seatCounts = computed<number[]>(() => {
 })
 
 const trimmedName = computed<string>(() => playerName.value.trim())
+const colorName = computed<string>(() => dieSkin(playerColor.value).name)
 const canCreate = computed<boolean>(() => trimmedName.value.length > 0 && !busy.value)
 
 const canJoin = computed<boolean>(
@@ -105,19 +111,70 @@ function rememberedName(): string {
 }
 
 /**
- * Keeps the name for the next match, so it is typed once rather than every time.
- * @param name - The name being played under, already trimmed
+ * The colour this browser last played in.
+ *
+ * Guarded like the name beside it, and checked against the palette rather than
+ * trusted: what is in storage was written by an older build of this page, and
+ * a colour that has since been taken out of the palette is a die drawn in
+ * nothing.
+ * @returns The stored colour, or bone if there is none to be had
  */
-function rememberName(name: string): void {
+function rememberedColor(): number {
+  try {
+    const stored = Number(localStorage.getItem(COLOR_KEY))
+
+    return isDieSkin(stored) ? stored : BONE_SKIN
+  } catch {
+    return BONE_SKIN
+  }
+}
+
+/**
+ * Keeps the name and the colour for the next match, so both are chosen once
+ * rather than every time.
+ * @param name - The name being played under, already trimmed
+ * @param color - The colour being played in
+ */
+function remember(name: string, color: number): void {
   try {
     localStorage.setItem(NAME_KEY, name)
+    localStorage.setItem(COLOR_KEY, String(color))
   } catch {
-    // Storage is blocked; the name simply is not remembered
+    // Storage is blocked; neither is remembered
+  }
+}
+
+/**
+ * Takes a colour and puts the palette away.
+ * @param skin - The colour chosen
+ */
+function onPickColor(skin: number): void {
+  playerColor.value = skin
+  picking.value = false
+}
+
+/**
+ * Closes the palette when the next press lands outside it.
+ *
+ * Bound on the window rather than on a backdrop element, so the press that
+ * closes the palette still reaches whatever it was aimed at — a player going
+ * straight from the colours to the button that starts the match presses it
+ * once, not twice.
+ * @param event - The press, wherever it landed
+ */
+function onPressAnywhere(event: PointerEvent): void {
+  const inside = event.target instanceof Node && picker.value?.contains(event.target) === true
+
+  if (!inside) {
+    picking.value = false
   }
 }
 
 onMounted(() => {
   playerName.value = rememberedName()
+  playerColor.value = rememberedColor()
+
+  window.addEventListener('pointerdown', onPressAnywhere)
 
   // A player arriving from a match they turned out not to be in, with the code
   // carried over so they only have to say who they are
@@ -159,6 +216,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   stopWatchingMatches?.()
   stopWatchingPlayer?.()
+  window.removeEventListener('pointerdown', onPressAnywhere)
 })
 
 function describe(reason: unknown): string {
@@ -204,11 +262,19 @@ async function runCreate(withBots: boolean): Promise<void> {
   busy.value = true
   pressed.value = withBots ? 'bots' : 'match'
   error.value = ''
-  rememberName(trimmedName.value)
+  remember(trimmedName.value, playerColor.value)
 
   try {
-    const bots = withBots ? createBots(playerCount.value - 1, trimmedName.value) : []
-    const created = await MatchClient.create(trimmedName.value, playerCount.value, bots)
+    const bots = withBots
+      ? createBots(playerCount.value - 1, trimmedName.value, playerColor.value)
+      : []
+
+    const created = await MatchClient.create(
+      trimmedName.value,
+      playerColor.value,
+      playerCount.value,
+      bots,
+    )
 
     await router.push({
       name: 'match',
@@ -245,10 +311,10 @@ async function runCreate(withBots: boolean): Promise<void> {
 async function takeSeat(match: string): Promise<string> {
   busy.value = true
   pressed.value = 'none'
-  rememberName(trimmedName.value)
+  remember(trimmedName.value, playerColor.value)
 
   try {
-    await MatchClient.join(match, trimmedName.value)
+    await MatchClient.join(match, trimmedName.value, playerColor.value)
 
     await router.push({
       name: 'match',
@@ -425,19 +491,59 @@ function onPaste(): void {
            field of that form across the gap all the same, so Enter here still
            presses whatever the card below is offering. -->
       <section class="card">
-        <label class="field">
-          <span class="field__label">Your name</span>
-          <input
-            ref="nameField"
-            v-model="playerName"
-            class="field__input"
-            type="text"
-            form="lobby-form"
-            :maxlength="NAME_LIMIT"
-            :disabled="busy"
-            autocomplete="nickname"
-          >
-        </label>
+        <div class="field">
+          <label class="field__label" for="player-name">Your name</label>
+
+          <!-- The colour sits on the row with the name because it is the other
+               half of the same answer: who you are at this table, and which
+               dice on it are yours. It is a die rather than a chip, in the
+               colour and with the pip the real ones will carry, so what is
+               being chosen is shown rather than described. -->
+          <div class="named">
+            <input
+              id="player-name"
+              ref="nameField"
+              v-model="playerName"
+              class="field__input"
+              type="text"
+              form="lobby-form"
+              :maxlength="NAME_LIMIT"
+              :disabled="busy"
+              autocomplete="nickname"
+            >
+
+            <div ref="picker" class="picker">
+              <button
+                type="button"
+                class="picker__button"
+                :class="{'picker__button--open': picking}"
+                :aria-label="`Dice colour: ${colorName}`"
+                aria-haspopup="true"
+                :aria-expanded="picking"
+                :disabled="busy"
+                @click="picking = !picking"
+                @keydown.esc="picking = false"
+              >
+                <DieFace :value="1" :skin="playerColor" />
+              </button>
+
+              <ul v-if="picking" class="palette" @keydown.esc="picking = false">
+                <li v-for="(skin, index) in DIE_SKINS" :key="skin.name">
+                  <button
+                    type="button"
+                    class="palette__option"
+                    :class="{'palette__option--taken': index === playerColor}"
+                    :aria-label="skin.name"
+                    :aria-pressed="index === playerColor"
+                    @click="onPickColor(index)"
+                  >
+                    <DieFace :value="1" :skin="index" />
+                  </button>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- Only in the page while somebody is waiting in something. A match with
@@ -797,6 +903,7 @@ function onPaste(): void {
 .match:disabled,
 .switch__option:disabled,
 .field__input:disabled,
+.picker__button:disabled,
 .counts__option:disabled,
 .paste:disabled {
     opacity: 0.45;
@@ -840,6 +947,102 @@ function onPaste(): void {
 
 .field__input:hover:not(:disabled) {
     border-color: var(--brass);
+}
+
+/* The name and the colour are one answer on one line. The button is square
+   and stretches to whatever the input is tall, so the two read as halves of a
+   single control rather than as a field with something bolted beside it */
+.named {
+    display: flex;
+    align-items: stretch;
+    gap: 0.5rem;
+}
+
+/* The colours hang off this rather than off the row, so they are placed
+   against the button they came out of and not against the card */
+.picker {
+    position: relative;
+    flex: none;
+}
+
+/* Cut out of the card exactly as the field beside it is: same rim, same well,
+   same corner. What separates them is that this one is a die */
+.picker__button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    aspect-ratio: 1;
+    height: 100%;
+    padding: 0;
+    border: 1px solid var(--brass-edge);
+    border-radius: 0.5rem;
+    background: var(--well);
+    cursor: pointer;
+    transition: border-color 160ms ease;
+}
+
+.picker__button:hover:not(:disabled),
+.picker__button--open {
+    border-color: var(--brass);
+}
+
+/* Sized off the button rather than left at the face's own default, so the die
+   sits inside the rim with the same air the caret has inside the field */
+.picker__button :deep(.die-face) {
+    --size: 1.5rem;
+}
+
+/* Over the card below rather than in the stack, so opening the colours does
+   not push the two ways into a match down the screen and then pull them back.
+   Hung from the right edge, which is the edge the button is on */
+.palette {
+    position: absolute;
+    top: calc(100% + 0.5rem);
+    right: 0;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: repeat(4, auto);
+    gap: 0.5rem;
+    padding: 0.625rem;
+    border: 1px solid var(--brass-edge);
+    border-radius: 0.75rem;
+    background: var(--panel);
+    list-style: none;
+
+    /* The card's own pair of shadows, since this is a card that opened */
+    box-shadow:
+        inset 0 1px 0 rgb(200 164 104 / 18%),
+        0 1rem 2rem rgb(0 0 0 / 55%);
+
+    /* Dropped from the button rather than faded in, so it reads as the eight
+       dice being set out on the table under it */
+    transform-origin: top right;
+    animation: palette-opened 140ms ease-out;
+}
+
+@keyframes palette-opened {
+    from {
+        transform: scale(0.9);
+        opacity: 0;
+    }
+
+    to {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+/* The ring the seat counts are chosen by, on the colour that is */
+.palette__option {
+    padding: 0;
+    border: 0;
+    border-radius: 0.375rem;
+    background: transparent;
+    cursor: pointer;
+}
+
+.palette__option--taken {
+    box-shadow: 0 0 0 2px var(--brass);
 }
 
 .field__input--code {

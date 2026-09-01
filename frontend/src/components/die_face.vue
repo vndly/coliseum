@@ -1,18 +1,38 @@
 <!-- A die face, carrying the same pip layout as the dice in the bowl.
 
      The game counts in dice, so the interface does too: a match's size is
-     chosen as a face, and a seat is shown as a face. Decorative on its own —
-     whatever it stands for is named in text beside it or on the control that
-     wraps it. -->
+     chosen as a face, a seat is shown as a face, and a colour is chosen as the
+     face it will be played in. Decorative on its own — whatever it stands for
+     is named in text beside it or on the control that wraps it. -->
 <script setup lang="ts">
 import {computed} from 'vue'
+import {dieSkinCss} from '@/scene/die_skins'
 
 const props = withDefaults(defineProps<{
   value: number
   lit?: boolean
+
+  /**
+   * A colour off the dice's own palette to paint the face in, rather than the
+   * bone every other face here is drawn in.
+   *
+   * A face given one is lit by definition: the whole reason to name a colour
+   * is to show a die in it. Both halves are taken from the palette together,
+   * because the pip colour is the half that keeps the face countable and
+   * choosing a body without it is how a die ends up unreadable.
+   */
+  skin?: number | null
 }>(), {
   lit: false,
+  skin: null,
 })
+
+const painted = computed<boolean>(() => props.skin !== null)
+
+const colors = computed<{body: string,
+  pip: string} | null>(
+  () => props.skin === null ? null : dieSkinCss(props.skin),
+)
 
 /**
  * Which cells of a three by three grid carry a pip, numbered left to right and
@@ -44,7 +64,15 @@ const cells = computed<number[]>(() => {
 </script>
 
 <template>
-  <span class="die-face" :class="{'die-face--lit': lit}" aria-hidden="true">
+  <span
+    class="die-face"
+    :class="{'die-face--lit': lit || painted}"
+    :style="colors === null ? undefined : {
+      '--body': colors.body,
+      '--pip-on': colors.pip,
+    }"
+    aria-hidden="true"
+  >
     <span
       v-for="cell in 9"
       :key="cell"
@@ -79,10 +107,16 @@ const cells = computed<number[]>(() => {
 }
 
 /* Lit reads as a die pulled out of the bowl and set down: bone, with the pips
-   actually cut into it, rather than the dark blank of an unfilled seat */
+   actually cut into it, rather than the dark blank of an unfilled seat.
+
+   The two colours are named rather than written in, so that a face given a
+   skin overrides the pair and everything below goes on reading one rule. */
 .die-face--lit {
-    border-color: var(--bone);
-    background: var(--bone);
+    --body: var(--bone);
+    --pip-on: var(--pip);
+
+    border-color: var(--body);
+    background: var(--body);
 }
 
 .die-face__pip {
@@ -95,6 +129,6 @@ const cells = computed<number[]>(() => {
 }
 
 .die-face--lit .die-face__pip--on {
-    background: var(--pip);
+    background: var(--pip-on);
 }
 </style>

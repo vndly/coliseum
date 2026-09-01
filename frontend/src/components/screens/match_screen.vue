@@ -13,7 +13,8 @@ import {nextBotMove} from '@/match/bots'
 import type {BotMove} from '@/match/bots'
 import {MatchClient} from '@/match/match_client'
 import type {MatchPlayer, MatchState, ThrowRecord} from '@/match/match_state'
-import {nextActivePlayer, poolSize, throwSize} from '@/match/rules'
+import {drawFromHand, nextActivePlayer, poolSize, throwSize} from '@/match/rules'
+import {dieSkin, dieSkinCss} from '@/scene/die_skins'
 import type {ThrowLaunch} from '@/scene/die_state'
 import {DIE_LIMIT} from '@/scene/dimensions'
 import {DishScene} from '@/scene/dish_scene'
@@ -480,9 +481,15 @@ function onLaunch(launches: ThrowLaunch[]): void {
     return
   }
 
+  // The front of the hand, which is what a queue hands over. The colours go
+  // out with the throw rather than being looked up when it lands, so that
+  // every player builds the same coloured die from the same record.
+  const drawn = drawFromHand(match, player.uid, launches.length)
+
   const seq = match.throwSeq + 1
   const dice = launches.map((launch, index) => ({
     id: `${seq}-${index}`,
+    skin: drawn.thrown[index] ?? player.color,
     launch: launch,
   }))
 
@@ -491,7 +498,7 @@ function onLaunch(launches: ThrowLaunch[]): void {
   busy.value = true
   scene?.applyThrow(dice)
 
-  const submitted = connected.submitThrow(seq, dice, player.uid)
+  const submitted = connected.submitThrow(seq, dice, player.uid, drawn.kept)
 
   pendingThrow = submitted
 
@@ -697,6 +704,24 @@ function handOf(player: MatchPlayer): number {
 }
 
 /**
+ * The colour a seat is playing in, ready for its swatch on the rail.
+ *
+ * The swatch says which seat is which and nothing more. What anybody is
+ * holding is deliberately left to the count beside it: a hand broken out by
+ * colour would tell the whole table what each player is about to throw, which
+ * is a fact the game does not otherwise give away.
+ * @param player - The seat to paint
+ * @returns The colour, as CSS, and the name for anything reading the rail out
+ */
+function colorOf(player: MatchPlayer): {body: string,
+  name: string} {
+  return {
+    body: dieSkinCss(player.color).body,
+    name: dieSkin(player.color).name,
+  }
+}
+
+/**
  * Whether a player is out of the match, rather than merely empty-handed for as
  * long as their own dice are in the air.
  * @param player - The seat to test
@@ -838,6 +863,12 @@ onBeforeUnmount(() => {
               'rail__player--out': isOut(player),
             }"
           >
+            <span
+              class="rail__swatch"
+              :style="{background: colorOf(player).body}"
+              :title="colorOf(player).name"
+            />
+
             <span class="rail__name">{{ player.name }}</span>
 
             <!-- Counted while there is a hand to count. The nought at the end
@@ -1147,6 +1178,34 @@ onBeforeUnmount(() => {
 .rail__player--active {
     border-color: var(--brass-edge);
     background: rgb(43 23 13 / 80%);
+}
+
+/* Small, and set against the pill rather than on it: the colour is how a seat
+   is recognised in the bowl, so the rail only has to hold up the same colour
+   beside the name. */
+.rail__swatch {
+    width: 0.625rem;
+    height: 0.625rem;
+    flex: none;
+
+    /* The proportion the real die is rounded by, on a square this small */
+    border-radius: 22%;
+
+    /* The rim keeps a bone seat from disappearing into the light, and the bead
+       along the top is what keeps a near-black one from disappearing into the
+       pill it sits on — without it a dark swatch reads as an empty outline
+       rather than as a filled chip, which is the one way two seats can be
+       confused for each other on a rail whose whole job is telling them
+       apart. It is the same lit lip the cards in the lobby are drawn with. */
+    box-shadow:
+        inset 0 1px 0 rgb(243 236 224 / 32%),
+        0 0 0 1px var(--brass-edge);
+}
+
+/* A seat with nothing left to throw keeps its colour, faded with the name it
+   is beside — the dice it painted are still out there in other people's hands */
+.rail__player--out .rail__swatch {
+    opacity: 0.4;
 }
 
 .rail__name {

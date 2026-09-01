@@ -259,7 +259,7 @@ export class DishScene {
     }
 
     for (const die of dice) {
-      this.dice.throw(this.physics, die.id, die.launch)
+      this.dice.throw(this.physics, die.id, die.skin, die.launch)
     }
 
     this.throwing = 0

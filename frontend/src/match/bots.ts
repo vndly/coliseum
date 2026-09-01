@@ -1,5 +1,6 @@
 import type {MatchPlayer, MatchState} from '@/match/match_state'
 import {poolSize} from '@/match/rules'
+import {DIE_SKINS} from '@/scene/die_skins'
 
 /**
  * The players nobody is sitting behind: how they are drawn up, and how they
@@ -73,32 +74,42 @@ export type BotMove = 'throw' | 'pass'
 /**
  * Draws up the seats a bot match is played against.
  *
- * The names are drawn without replacement so no two bots share one, and the
- * player's own name is taken out of the draw first — two Kims at one table is
- * a rail nobody can read. There are always enough left: six names, and a match
- * seats at most five bots.
+ * Names and colours are both drawn without replacement, so no two bots share
+ * either, and the player's own are taken out of both draws first — two Kims at
+ * one table is a rail nobody can read, and two clarets in one bowl is worse.
+ * There are always enough left of each: six names and eight colours against
+ * the five bots a match can seat.
+ *
+ * Colours are drawn apart here and left to collide between people, which is
+ * not an inconsistency. A player chose theirs and can see what they chose;
+ * nobody chose a bot's, so the only thing that can make a table of them
+ * readable is the draw.
  * @param count - How many bots the match needs, which is every seat but the player's
  * @param without - The name the player is sitting under, so no bot takes it too
+ * @param color - The colour they are playing in, so no bot takes that either
  * @returns The bots, ready to be seated
  */
-export function createBots(count: number, without: string): MatchPlayer[] {
+export function createBots(count: number, without: string, color: number): MatchPlayer[] {
   const taken = without.trim().toLowerCase()
   const undrawn = BOT_NAMES.filter((name) => name.toLowerCase() !== taken)
+  const unpainted = DIE_SKINS.map((_, skin) => skin).filter((skin) => skin !== color)
   const bots: MatchPlayer[] = []
 
   while (bots.length < count) {
     const [name] = undrawn.splice(Math.floor(Math.random() * undrawn.length), 1)
+    const [skin] = unpainted.splice(Math.floor(Math.random() * unpainted.length), 1)
 
-    // Unreachable: the pool is larger than the most bots a match can hold.
+    // Unreachable: both pools are larger than the most bots a match can hold.
     // Guarded rather than asserted away, since indexing yields a possible
     // undefined and this project does not argue with that.
-    if (name === undefined) {
+    if (name === undefined || skin === undefined) {
       break
     }
 
     bots.push({
       uid: `${BOT_UID_PREFIX}${bots.length + 1}`,
       name: name,
+      color: skin,
       bot: true,
     })
   }

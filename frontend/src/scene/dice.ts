@@ -9,6 +9,8 @@ import type {BufferGeometry, Object3D} from 'three'
 import {RoundedBoxGeometry} from 'three/addons/geometries/RoundedBoxGeometry.js'
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js'
 import {Die} from '@/scene/die'
+import type {DieMeshes} from '@/scene/die'
+import {BONE_SKIN, DIE_SKINS} from '@/scene/die_skins'
 import {DIE_FACE_NORMALS} from '@/scene/die_state'
 import type {DieSnapshot, ThrowLaunch} from '@/scene/die_state'
 import type {PhysicsWorld} from '@/scene/physics_world'
@@ -37,17 +39,22 @@ import {DIE_CLEARCOAT,
  * the spill. The hard limit is a guard against a spammed pointer, not a rule
  * of the game.
  *
- * One geometry and one pair of materials are built here and shared by every
- * die, so a bowl full of them costs a draw call each and no memory at all.
+ * One geometry is built here and shared by every die, and one pair of
+ * materials per colour a die can be painted in — so a bowl full of them costs
+ * a draw call each and no memory at all, however many colours are on the
+ * table.
  */
 export class Dice {
   private readonly group: Group // All the dice, under one node
   private readonly bodyGeometry: RoundedBoxGeometry
   private readonly pipGeometry: BufferGeometry // All twenty-one pips, merged into one
-  private readonly bodyMaterial: MeshPhysicalMaterial
-  private readonly pipMaterial: MeshPhysicalMaterial
+  private readonly bodyMaterials: MeshPhysicalMaterial[] // One per skin, in palette order
+  private readonly pipMaterials: MeshPhysicalMaterial[] // The same, for the pips
+  private readonly boneBody: MeshPhysicalMaterial // Skin zero again, as what an unknown skin falls to
+  private readonly bonePip: MeshPhysicalMaterial
   private readonly removedMaterial: MeshPhysicalMaterial // The wash a six leaves in
   private readonly matchedMaterial: MeshPhysicalMaterial // The wash a group comes back in
+  private readonly washPipMaterial: MeshPhysicalMaterial // The pips under either wash
   private readonly dice: Die[] = []
   private readonly restoredPosition = new Vector3() // Scratch, to keep reconciling allocation free
   private readonly restoredRotation = new Quaternion()
@@ -66,25 +73,44 @@ export class Dice {
 
     // Polished resin against the bowl's lacquer: the same clearcoat trick, but
     // a softer coat, so the die reads as a lighter and cheaper material than
-    // the wood it lands in rather than as another turned surface.
-    this.bodyMaterial = new MeshPhysicalMaterial({
-      color: DIE_COLOR,
+    // the wood it lands in rather than as another turned surface. One pair per
+    // colour, built once here: a table of six players wears at most six of
+    // them, and building them all costs less than deciding which are needed.
+    this.bodyMaterials = DIE_SKINS.map((skin) => this.buildBody(skin.body))
+
+    this.pipMaterials = DIE_SKINS.map((skin) => new MeshPhysicalMaterial({
+      color: skin.pip,
       roughness: DIE_ROUGHNESS,
       metalness: 0,
-      clearcoat: DIE_CLEARCOAT,
-      clearcoatRoughness: DIE_CLEARCOAT_ROUGHNESS,
-    })
+    }))
 
-    this.pipMaterial = new MeshPhysicalMaterial({
+    // Named as well as indexed, so that a skin this browser has never heard of
+    // has somewhere to fall without either asserting an index away or building
+    // a material in the middle of a frame. Both fallbacks below are
+    // unreachable — the arrays are the palette, mapped — and guarded rather
+    // than asserted, as every other index in this project is.
+    this.boneBody = this.bodyMaterials[BONE_SKIN] ?? this.buildBody(DIE_COLOR)
+
+    this.bonePip = this.pipMaterials[BONE_SKIN] ?? new MeshPhysicalMaterial({
       color: DIE_PIP_COLOR,
       roughness: DIE_ROUGHNESS,
       metalness: 0,
     })
 
-    // Shared like the other two rather than cloned per die. However many dice
-    // a verdict washes, there are only ever these two colours on the table.
-    this.removedMaterial = this.buildWash(DIE_REMOVED_COLOR)
-    this.matchedMaterial = this.buildWash(DIE_MATCHED_COLOR)
+    // Shared like the rest rather than cloned per die. However many dice a
+    // verdict washes, there are only ever these two colours on the table.
+    this.removedMaterial = this.buildBody(DIE_REMOVED_COLOR)
+    this.matchedMaterial = this.buildBody(DIE_MATCHED_COLOR)
+
+    // Dark, and the same under both washes. A wash replaces the body outright,
+    // so a claret die washed to ember would otherwise keep the light pips that
+    // were chosen to read against claret — and the one thing a wash must not
+    // cost is the ability to count the face it is washing.
+    this.washPipMaterial = new MeshPhysicalMaterial({
+      color: DIE_PIP_COLOR,
+      roughness: DIE_ROUGHNESS,
+      metalness: 0,
+    })
   }
 
   get object(): Object3D {
@@ -135,17 +161,17 @@ export class Dice {
    * Puts a new die into the world, already moving.
    * @param physics - The world it is thrown into; nothing happens until it is ready
    * @param identifier - The name both players know this die by
+   * @param skin - The colour it is painted in, which came with the throw
    * @param launch - The throw, exactly as the thrower described it
    */
-  throw(physics: PhysicsWorld, identifier: string, launch: ThrowLaunch): void {
+  throw(physics: PhysicsWorld, identifier: string, skin: number, launch: ThrowLaunch): void {
     const world = physics.world
 
     if (world === null || this.dice.length >= DIE_LIMIT) {
       return
     }
 
-    const built = this.buildMeshes()
-    const die = Die.thrown(world, built.group, built.shell, identifier, launch)
+    const die = Die.thrown(world, this.buildMeshes(skin), identifier, skin, launch)
 
     this.group.add(die.object)
     this.dice.push(die)
@@ -245,8 +271,7 @@ export class Dice {
     }
 
     for (const snapshot of this.wanted.values()) {
-      const built = this.buildMeshes()
-      const die = Die.resting(world, built.group, built.shell, snapshot)
+      const die = Die.resting(world, this.buildMeshes(snapshot.skin), snapshot)
 
       this.group.add(die.object)
       this.dice.push(die)
@@ -280,10 +305,23 @@ export class Dice {
   dispose(): void {
     this.bodyGeometry.dispose()
     this.pipGeometry.dispose()
-    this.bodyMaterial.dispose()
-    this.pipMaterial.dispose()
+
+    // Through a set, because the bone pair is normally the first entry of each
+    // array beside it rather than a material of its own
+    const materials = new Set([
+      ...this.bodyMaterials,
+      ...this.pipMaterials,
+      this.boneBody,
+      this.bonePip,
+    ])
+
+    for (const material of materials) {
+      material.dispose()
+    }
+
     this.removedMaterial.dispose()
     this.matchedMaterial.dispose()
+    this.washPipMaterial.dispose()
   }
 
   /**
@@ -294,25 +332,47 @@ export class Dice {
   private paint(identifiers: string[], material: MeshPhysicalMaterial): void {
     for (const die of this.dice) {
       if (identifiers.includes(die.id)) {
-        die.applyMaterial(material)
+        die.applyMaterials(material, this.washPipMaterial)
       }
     }
   }
 
-  /** Puts every die back in its own bone. */
+  /** Puts every die back in the colour it was thrown in. */
   private clearWashes(): void {
     for (const die of this.dice) {
-      die.applyMaterial(this.bodyMaterial)
+      die.applyMaterials(this.bodyOf(die.skin), this.pipOf(die.skin))
     }
   }
 
   /**
-   * Builds one of the verdict's washes: the die's own material in a different
-   * colour, so a washed die is lit and polished exactly as it was before.
-   * @param color - The colour to wash in
-   * @returns The material, shared by every die the verdict paints with it
+   * One skin's body material.
+   *
+   * Falls back to bone rather than indexing blind: a skin arriving from
+   * another player's document is only as trustworthy as that document, and a
+   * die with no material at all is a die that is not drawn.
+   * @param skin - Which of DIE_SKINS
+   * @returns The material that skin's dice are drawn with
    */
-  private buildWash(color: number): MeshPhysicalMaterial {
+  private bodyOf(skin: number): MeshPhysicalMaterial {
+    return this.bodyMaterials[skin] ?? this.boneBody
+  }
+
+  /**
+   * One skin's pip material, which reads light or dark according to its body.
+   * @param skin - Which of DIE_SKINS
+   * @returns The material that skin's pips are drawn with
+   */
+  private pipOf(skin: number): MeshPhysicalMaterial {
+    return this.pipMaterials[skin] ?? this.bonePip
+  }
+
+  /**
+   * Builds a die's body material: polished resin in whatever colour is asked
+   * for, so a washed die is lit exactly as it was before.
+   * @param color - The colour to build in
+   * @returns The material, shared by every die drawn in it
+   */
+  private buildBody(color: number): MeshPhysicalMaterial {
     return new MeshPhysicalMaterial({
       color: color,
       roughness: DIE_ROUGHNESS,
@@ -371,16 +431,17 @@ export class Dice {
   /**
    * Builds the meshes for one die, over the shared geometry and materials.
    *
-   * The body is handed back beside the group holding it. It is the half a
-   * verdict's wash goes on, and a die that had to find it among its own
-   * children would be a die that knows how it was assembled.
-   * @returns The die's visual half, and the body within it
+   * Both halves are handed back beside the group holding them. They are what a
+   * verdict's wash goes on and what it comes back off, and a die that had to
+   * find them among its own children would be a die that knows how it was
+   * assembled.
+   * @param skin - The colour to build it in
+   * @returns The die's visual half, and the two meshes within it
    */
-  private buildMeshes(): {group: Group,
-    shell: Mesh} {
+  private buildMeshes(skin: number): DieMeshes {
     const group = new Group()
-    const shell = new Mesh(this.bodyGeometry, this.bodyMaterial)
-    const pips = new Mesh(this.pipGeometry, this.pipMaterial)
+    const shell = new Mesh(this.bodyGeometry, this.bodyOf(skin))
+    const pips = new Mesh(this.pipGeometry, this.pipOf(skin))
 
     shell.castShadow = true
     shell.receiveShadow = true
@@ -391,6 +452,7 @@ export class Dice {
     return {
       group: group,
       shell: shell,
+      pips: pips,
     }
   }
 

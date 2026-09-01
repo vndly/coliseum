@@ -1,3 +1,5 @@
+import {MAX_PLAYERS, STARTING_POOL} from '@/match/rules'
+import {BONE_SKIN, isDieSkin} from '@/scene/die_skins'
 import type {DieSnapshot, ThrowLaunch, ThrowResolution, ThrownDie} from '@/scene/die_state'
 
 /**
@@ -19,6 +21,18 @@ export interface MatchPlayer {
   name: string
 
   /**
+   * The colour this player's own six dice are painted in, as an index into
+   * DIE_SKINS.
+   *
+   * Chosen in the lobby and settled with the seat, like the name beside it.
+   * Two people may sit down in the same one: a colour is a skin a player picked
+   * for themselves rather than a badge the match hands out, and nothing in the
+   * rules reads it. Bots are the exception, and are drawn apart on purpose —
+   * a table nobody chose the colours of should still be one you can read.
+   */
+  color: number
+
+  /**
    * Whether nobody is sitting behind this seat.
    *
    * A bot is a seat like any other — it holds dice, it takes its turn, it is
@@ -37,7 +51,7 @@ export interface MatchState {
   players: MatchPlayer[] // Join order while the lobby fills; the order they play in once it has
 
   /**
-   * How many dice each player is holding, by identifier.
+   * What each player is holding, by identifier.
    *
    * Kept apart from players rather than on it, because the two change at
    * completely different rates: the seats are written once and never again,
@@ -45,16 +59,22 @@ export interface MatchState {
    * whole match vanish, and nothing rewritten that often should be able to do
    * that.
    *
+   * A list rather than a count, and each entry is the colour of one die in
+   * hand. The paint on a die outlives the hand it is in — a die won in a pair
+   * keeps the colour of whoever put it in the bowl — so a hand has to say what
+   * it is holding and not merely how much. The count everything else asks for
+   * is this list's length, and nothing else counts a hand.
+   *
    * A hand is charged the moment its dice leave it and paid back only when the
-   * throw is judged, so zero on its own is not elimination — a player whose
+   * throw is judged, so empty on its own is not elimination — a player whose
    * dice are still in the air is holding nothing and is very much still in.
-   * Zero *once that throw has been judged* is elimination, and needs no flag
+   * Empty *once that throw has been judged* is elimination, and needs no flag
    * beside it to say so: a hand only ever grows by its own player pairing dice,
    * which needs their turn, which is skipped once they have none. Past that
    * point nothing in the game can take a hand off zero, and it is a one-way
    * door.
    */
-  pools: Record<string, number>
+  pools: Record<string, number[]>
 
   turnIndex: number // Into players
   hasThrown: boolean // Whether the player whose turn it is may pass yet
@@ -100,6 +120,9 @@ export interface ThrowRecord {
   uid: string
   dice: ThrownDie[]
 }
+
+/** Every die a match can hold, which is the most any one hand could be. */
+const MATCH_DICE = STARTING_POOL * MAX_PLAYERS
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -179,6 +202,23 @@ function readQuadruple(value: unknown): [number, number, number, number] | null 
 }
 
 /**
+ * Reads a die's colour.
+ *
+ * Read leniently, like the flag that says a seat is a bot: a die is bone
+ * unless the document names a colour it can be painted in. Matches written
+ * before there were colours say nothing at all, and a skin naming a swatch
+ * this browser has never heard of is a document from a newer palette — neither
+ * is worth refusing a whole bowl over.
+ * @param value - The field as it came out of the document
+ * @returns The skin, or bone if there is not one there
+ */
+function readSkin(value: unknown): number {
+  const skin = readNumber(value)
+
+  return skin !== null && isDieSkin(skin) ? skin : BONE_SKIN
+}
+
+/**
  * Reads a die's value, which is the one field here with a range worth stating.
  * Everything else is a coordinate and any number is a possible one; a face
  * outside one to six is a die the rules would judge and never remove.
@@ -214,6 +254,7 @@ function readDieSnapshot(value: unknown): DieSnapshot | null {
     position: position,
     rotation: rotation,
     face: face,
+    skin: readSkin(value.skin),
   }
 }
 
@@ -270,32 +311,67 @@ function readResolution(value: unknown): ThrowResolution | null {
 }
 
 /**
+ * Reads one hand: the colour of every die in it, in the order they will be
+ * thrown.
+ *
+ * A bare number is accepted as that many bone dice, which is what a hand
+ * written before dice had colours looks like. It is the one place the two
+ * shapes meet, and it is here rather than anywhere further in so that
+ * everything downstream reads one hand and not two.
+ * @param value - One player's entry, as it came out of the document
+ * @returns The hand, or null if it is neither shape
+ */
+function readHand(value: unknown): number[] | null {
+  const count = readNumber(value)
+
+  // Bounded before it is built, in the same way and for the same reason the
+  // lobby bounds a stored seat count: this number is handed to a constructor
+  // as a length, so a stored 2.5 is an invalid array length and a stored
+  // billion is an allocation that takes the tab down with it — and this runs
+  // inside parseMatchState, which the lobby calls on every open match it is
+  // shown. Every die in the match is accounted for, so nothing this game
+  // writes is outside the range and what this refuses is a document written
+  // by something that is not this game.
+  if (count !== null) {
+    return Number.isInteger(count) && count >= 0 && count <= MATCH_DICE
+      ? new Array<number>(count).fill(BONE_SKIN)
+      : null
+  }
+
+  if (!isArray(value) || value.length > MATCH_DICE) {
+    return null
+  }
+
+  return value.map((entry) => readSkin(entry))
+}
+
+/**
  * Reads every player's hand.
  *
  * A hand belonging to nobody at the table is kept rather than refused: seats
  * are written once and hands are rewritten by every throw, so the two are read
  * against each other where they are used and not here.
  * @param value - The field as it came out of the document
- * @returns Every hand, or null if any count could not be read
+ * @returns Every hand, or null if any of them could not be read
  */
-function readPools(value: unknown): Record<string, number> | null {
+function readPools(value: unknown): Record<string, number[]> | null {
   if (!isRecord(value)) {
     return null
   }
 
-  const pools: Record<string, number> = {}
+  const pools: Record<string, number[]> = {}
 
   for (const [
     uid,
-    count,
+    hand,
   ] of Object.entries(value)) {
-    const size = readNumber(count)
+    const held = readHand(hand)
 
-    if (size === null) {
+    if (held === null) {
       return null
     }
 
-    pools[uid] = size
+    pools[uid] = held
   }
 
   return pools
@@ -350,6 +426,7 @@ function readPlayers(value: unknown): MatchPlayer[] | null {
     players.push({
       uid: uid,
       name: name,
+      color: readSkin(entry.color),
 
       // Read leniently, like the flag that says a turn has had a throw:
       // a seat is a person unless the document says otherwise, and matches
@@ -485,6 +562,7 @@ function readThrownDice(value: unknown): ThrownDie[] | null {
 
     dice.push({
       id: id,
+      skin: readSkin(entry.skin),
       launch: launch,
     })
   }

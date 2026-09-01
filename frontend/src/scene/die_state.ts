@@ -1,4 +1,5 @@
 import {Quaternion, Vector3} from 'three'
+import {BONE_SKIN} from '@/scene/die_skins'
 import {BOWL_INTERIOR_FLOOR_HEIGHT,
   BOWL_INTERIOR_FLOOR_RADIUS,
   DIE_SIZE,
@@ -44,6 +45,17 @@ export interface DieSnapshot {
   position: [number, number, number]
   rotation: [number, number, number, number] // Quaternion, x y z w
   face: number // The value showing, read off the rotation beside it every time one is taken
+
+  /**
+   * The colour the die is painted in, as an index into DIE_SKINS.
+   *
+   * Carried on the die rather than worked out from whoever threw it, because a
+   * die changes hands and its paint does not: the die that comes back to
+   * somebody in a pair is the same die, in the same colour, whoever put it in
+   * the bowl. It travels with every snapshot so that a player who never saw
+   * the throw still paints the bowl exactly as everyone else does.
+   */
+  skin: number
 }
 
 /**
@@ -68,6 +80,7 @@ export interface ThrowLaunch {
  */
 export interface ThrownDie {
   id: string
+  skin: number // The colour it is painted in, as an index into DIE_SKINS
   launch: ThrowLaunch
 }
 
@@ -133,6 +146,10 @@ export function readDieFace(rotation: [number, number, number, number]): number 
  * off — a die gone before anybody could pair it. Which is why the value showing
  * is drawn first, from the five that stay, and the attitude is built to put it
  * upwards rather than drawn and then inspected.
+ *
+ * Bone, like a die nobody has chosen a colour for. It is the one die in the
+ * match no hand paid for, and it goes on being bone through every hand it
+ * later passes into.
  * @returns The opening die, ready to be written into a new match
  */
 export function createOpeningDie(): DieSnapshot {
@@ -174,5 +191,6 @@ export function createOpeningDie(): DieSnapshot {
     ],
     rotation: attitude,
     face: readDieFace(attitude),
+    skin: BONE_SKIN,
   }
 }

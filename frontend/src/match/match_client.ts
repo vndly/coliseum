@@ -1,6 +1,5 @@
 import {collection,
   doc,
-  increment,
   limit,
   onSnapshot,
   orderBy,
@@ -14,7 +13,7 @@ import {createMatchCode} from '@/match/codes'
 import {currentPlayerId, firestore} from '@/match/firebase'
 import {parseMatchState, parseThrowRecord} from '@/match/match_state'
 import type {MatchPlayer, MatchState, ThrowRecord} from '@/match/match_state'
-import {STARTING_POOL, nextActivePlayer, resolveThrow, shuffledPlayers} from '@/match/rules'
+import {nextActivePlayer, resolveThrow, shuffledPlayers, startingHand} from '@/match/rules'
 import {createOpeningDie} from '@/scene/die_state'
 import type {DieSnapshot, ThrownDie} from '@/scene/die_state'
 
@@ -81,26 +80,33 @@ export class MatchClient {
    * otherwise do. Nothing is left for anyone to join, and nothing lists it:
    * the lobby offers seats in matches still waiting, and this one never waits.
    * @param name - What to call this player
+   * @param color - The colour this player's own dice are painted in
    * @param playerCount - How many seats the match has, including this one
    * @param bots - The seats nobody is sitting behind, or none for a match between people
    * @returns The code the match can be joined by
    */
-  static async create(name: string, playerCount: number, bots: MatchPlayer[]): Promise<string> {
+  static async create(
+    name: string,
+    color: number,
+    playerCount: number,
+    bots: MatchPlayer[],
+  ): Promise<string> {
     const playerId = await currentPlayerId()
 
     const seats: MatchPlayer[] = [
       {
         uid: playerId,
         name: name,
+        color: color,
         bot: false,
       },
       ...bots,
     ]
 
-    const pools: Record<string, number> = {}
+    const pools: Record<string, number[]> = {}
 
     for (const seat of seats) {
-      pools[seat.uid] = STARTING_POOL
+      pools[seat.uid] = startingHand(seat.color)
     }
 
     const started = seats.length === playerCount
@@ -158,8 +164,9 @@ export class MatchClient {
    * with on their own turn.
    * @param code - The match to join
    * @param name - What to call this player
+   * @param color - The colour this player's own dice are painted in
    */
-  static async join(code: string, name: string): Promise<void> {
+  static async join(code: string, name: string, color: number): Promise<void> {
     const playerId = await currentPlayerId()
     const reference = doc(firestore, MATCHES, code)
 
@@ -189,6 +196,7 @@ export class MatchClient {
         {
           uid: playerId,
           name: name,
+          color: color,
           bot: false,
         },
       ]
@@ -197,7 +205,7 @@ export class MatchClient {
         players: players,
         pools: {
           ...state.pools,
-          [playerId]: STARTING_POOL,
+          [playerId]: startingHand(color),
         },
       }
 
@@ -302,11 +310,23 @@ export class MatchClient {
    * throws for the bots in a match it started, and those dice come out of the
    * bot's hand — the throw is recorded under the seat that made it, which is
    * what every other player reads it as.
+   * The hand is written out rather than decremented. A count could be charged
+   * blind with an increment, and this cannot: which dice left is which colours
+   * left, and only the browser making the throw knows that. It is safe to
+   * write rather than read first — a hand is only ever spent by the player
+   * whose turn it is, and the verdict that pays it back rewrites every hand
+   * from a state read inside its own transaction.
    * @param seq - This throw's number, which every die of it is named after
    * @param dice - Every die of the throw, as this player described them
    * @param thrower - The seat the throw is made from, this player's own or a bot's
+   * @param kept - What that seat is left holding, once these dice have left it
    */
-  async submitThrow(seq: number, dice: ThrownDie[], thrower: string): Promise<void> {
+  async submitThrow(
+    seq: number,
+    dice: ThrownDie[],
+    thrower: string,
+    kept: number[],
+  ): Promise<void> {
     // Noted as already handed to the scene, because it has been: these dice
     // were thrown here the moment the gesture finished, and the record coming
     // back through the listener must not throw them a second time. Noted here
@@ -325,6 +345,7 @@ export class MatchClient {
       uid: thrower,
       dice: dice.map((die) => ({
         id: die.id,
+        skin: die.skin,
         origin: die.launch.origin,
         velocity: die.launch.velocity,
         orientation: die.launch.orientation,
@@ -335,7 +356,7 @@ export class MatchClient {
     batch.update(this.reference, {
       throwSeq: seq,
       hasThrown: true,
-      [`pools.${thrower}`]: increment(-dice.length),
+      [`pools.${thrower}`]: kept,
     })
 
     try {

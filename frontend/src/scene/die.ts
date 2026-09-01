@@ -17,12 +17,28 @@ import {DIE_ANGULAR_DAMPING,
 const AT_REST = new Vector3(0, 0, 0) // Shared, and only ever read
 
 /**
+ * The visual half of one die, as it is handed in.
+ *
+ * The two meshes are named beside the node holding them rather than looked up
+ * among its children, because both are painted over by a verdict and back
+ * again afterwards — a die that had to find them itself would be a die that
+ * knows how it was assembled.
+ */
+export interface DieMeshes {
+  group: Object3D // What the body's transform is copied onto
+  shell: Mesh // The die itself
+  pips: Mesh // All twenty-one of them, as one mesh
+}
+
+/**
  * One die in flight: a rigid body, and the meshes that are dragged along
  * behind it.
  *
  * The meshes are handed in rather than built here, because every die in the
- * bowl draws the same geometry and the same two materials — a die owns its
- * place in the world, not the shape it is drawn with.
+ * bowl draws the same geometry and, for its own colour, the same two materials
+ * — a die owns its place in the world, not the shape it is drawn with. The
+ * colour it was built in is remembered all the same, because a verdict paints
+ * over it and something has to know what to paint back.
  *
  * A die is built through one of the two named constructors rather than
  * directly, because there are exactly two ways one comes into existence and
@@ -40,8 +56,10 @@ const AT_REST = new Vector3(0, 0, 0) // Shared, and only ever read
  */
 export class Die {
   private readonly identifier: string // Agreed with every other player
+  private readonly paint: number // Which of DIE_SKINS it was built in, and is washed back to
   private readonly meshes: Object3D // The visual half, positioned from the body
-  private readonly shell: Mesh // The body within it, which is what carries the die's colour
+  private readonly shell: Mesh // The body within it, which carries most of the die's colour
+  private readonly pips: Mesh // The pips sunk into it, which carry the rest
   private readonly body: RigidBody
   private readonly collider: ColliderHandle // Cached, so it survives the body's removal
   private outOfPlay = false // Set once the die has reached the table
@@ -49,17 +67,19 @@ export class Die {
 
   private constructor(
     world: World,
-    meshes: Object3D,
-    shell: Mesh,
+    meshes: DieMeshes,
     identifier: string,
+    skin: number,
     position: Vector3,
     rotation: Quaternion,
     velocity: Vector3,
     angularVelocity: Vector3,
   ) {
     this.identifier = identifier
-    this.meshes = meshes
-    this.shell = shell
+    this.paint = skin
+    this.meshes = meshes.group
+    this.shell = meshes.shell
+    this.pips = meshes.pips
 
     this.body = world.createRigidBody(RigidBodyDesc.dynamic()
       .setTranslation(position.x, position.y, position.z)
@@ -104,24 +124,24 @@ export class Die {
   /**
    * Builds a die from a throw, wherever that throw was made.
    * @param world - The world the body is created in
-   * @param meshes - The visual half, already built
-   * @param shell - The body among those meshes, which the wash is put on
+   * @param meshes - The visual half, already built in the die's own colour
    * @param identifier - The name both players know this die by
+   * @param skin - The colour it was built in, which a wash is taken back off to
    * @param launch - The throw, exactly as the thrower described it
    * @returns The die, already moving
    */
   static thrown(
     world: World,
-    meshes: Object3D,
-    shell: Mesh,
+    meshes: DieMeshes,
     identifier: string,
+    skin: number,
     launch: ThrowLaunch,
   ): Die {
     return new Die(
       world,
       meshes,
-      shell,
       identifier,
+      skin,
       new Vector3(...launch.origin),
       new Quaternion(...launch.orientation),
       new Vector3(...launch.velocity),
@@ -134,17 +154,16 @@ export class Die {
    * Used for the die a match opens with, for rebuilding the bowl after a
    * reload, and for a die this player never saw thrown.
    * @param world - The world the body is created in
-   * @param meshes - The visual half, already built
-   * @param shell - The body among those meshes, which the wash is put on
-   * @param snapshot - Where the die sits and how it is turned
+   * @param meshes - The visual half, already built in the die's own colour
+   * @param snapshot - Where the die sits, how it is turned, and what it is painted in
    * @returns The die, at rest
    */
-  static resting(world: World, meshes: Object3D, shell: Mesh, snapshot: DieSnapshot): Die {
+  static resting(world: World, meshes: DieMeshes, snapshot: DieSnapshot): Die {
     return new Die(
       world,
       meshes,
-      shell,
       snapshot.id,
+      snapshot.skin,
       new Vector3(...snapshot.position),
       new Quaternion(...snapshot.rotation),
       AT_REST,
@@ -159,6 +178,11 @@ export class Die {
   /** The name this die goes by on every machine in the match. */
   get id(): string {
     return this.identifier
+  }
+
+  /** The colour it was built in, which a verdict's wash is taken back off to. */
+  get skin(): number {
+    return this.paint
   }
 
   /**
@@ -220,16 +244,24 @@ export class Die {
       ],
       rotation: attitude,
       face: readDieFace(attitude),
+      skin: this.paint,
     }
   }
 
   /**
-   * Paints the die's body, and only its body: the pips keep their own material
-   * so that a washed die is still one whose value can be counted.
-   * @param material - What the body is to be drawn with
+   * Paints the die, body and pips together.
+   *
+   * Both halves rather than the body alone, because the pips have to stay
+   * legible against whatever the body is now: a die is only worth washing if
+   * its value can still be counted afterwards, and the pip colour that reads
+   * against a claret die is not the one that reads against the ember a six
+   * leaves in.
+   * @param body - What the die itself is to be drawn with
+   * @param pip - What the pips sunk into it are to be drawn with
    */
-  applyMaterial(material: Material): void {
-    this.shell.material = material
+  applyMaterials(body: Material, pip: Material): void {
+    this.shell.material = body
+    this.pips.material = pip
   }
 
   /**
