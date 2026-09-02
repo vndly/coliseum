@@ -19,12 +19,25 @@ import {MatchClient} from '@/match/match_client'
 import {watchOpenMatches} from '@/match/open_matches'
 import type {OpenMatch} from '@/match/open_matches'
 import {MAX_PLAYERS, MIN_PLAYERS} from '@/match/rules'
-import {BONE_SKIN, DIE_SKINS, dieSkin, isDieSkin} from '@/scene/die_skins'
+import {BONE_SKIN, dieSkin, isDieSkin} from '@/scene/die_skins'
 
 const CODE_LENGTH = 4
 const NAME_LIMIT = 16
 const NAME_KEY = 'coliseum.player-name' // Where the last name played under is kept
 const COLOR_KEY = 'coliseum.player-color' // And the colour played in, beside it
+
+// Presentation order only: the numbers remain the stable skin identifiers that
+// are stored locally and sent through a match.
+const SWATCH_ORDER = [
+  0,
+  2,
+  3,
+  1,
+  6,
+  5,
+  4,
+  7,
+] as const
 
 const route = useRoute()
 const router = useRouter()
@@ -571,17 +584,17 @@ function onPaste(): void {
               </button>
 
               <ul v-if="picking" class="palette" @keydown.esc="closePalette">
-                <li v-for="(skin, index) in DIE_SKINS" :key="skin.name">
+                <li v-for="skin in SWATCH_ORDER" :key="skin">
                   <button
                     type="button"
                     class="palette__option"
-                    :class="{'palette__option--taken': index === playerColor}"
-                    :aria-label="skin.name"
-                    :aria-pressed="index === playerColor"
+                    :class="{'palette__option--taken': skin === playerColor}"
+                    :aria-label="dieSkin(skin).name"
+                    :aria-pressed="skin === playerColor"
                     :disabled="busy"
-                    @click="onPickColor(index)"
+                    @click="onPickColor(skin)"
                   >
-                    <DieFace :value="1" :skin="index" />
+                    <DieFace :value="1" :skin="skin" />
                   </button>
                 </li>
               </ul>

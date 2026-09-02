@@ -2,8 +2,7 @@
 
 ## TODO
 
-- Reorder swatch dice
-- Apocalypse revire
+- Apocalypse review
 - Allow to throw die with one click
 - Configure how many dice per player
 - Tournament
