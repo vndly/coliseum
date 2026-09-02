@@ -2,7 +2,6 @@
 
 ## TODO
 
-- Run apocalypse review
 - Allow to throw die with one click
 - Configure how many dice per player
 - Tournament
