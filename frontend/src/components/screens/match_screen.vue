@@ -1368,6 +1368,7 @@ onBeforeUnmount(() => {
     line-height: 1.1;
     text-align: center;
     color: var(--bone);
+    user-select: none;
 }
 
 /* Brass is what this interface says "yours" in — the hand being counted, the
