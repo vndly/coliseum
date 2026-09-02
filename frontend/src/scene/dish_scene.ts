@@ -3,6 +3,7 @@ import {ACESFilmicToneMapping,
   DirectionalLight,
   Fog,
   MOUSE,
+  MathUtils,
   PCFShadowMap,
   PMREMGenerator,
   PerspectiveCamera,
@@ -26,10 +27,12 @@ import {BACKGROUND_COLOR,
   CAMERA_FAR,
   CAMERA_FIELD_OF_VIEW,
   CAMERA_MAX_DISTANCE,
+  CAMERA_MAX_FIELD_OF_VIEW,
   CAMERA_MAX_POLAR_ANGLE,
   CAMERA_MIN_DISTANCE,
   CAMERA_MIN_POLAR_ANGLE,
   CAMERA_NEAR,
+  CAMERA_REFERENCE_ASPECT,
   CAMERA_START_AZIMUTH_ANGLE,
   CAMERA_START_DISTANCE,
   CAMERA_START_POLAR_ANGLE,
@@ -593,7 +596,33 @@ export class DishScene {
     // resize the drawing buffer without writing inline styles back onto it.
     this.renderer.setSize(width, height, false)
     this.camera.aspect = width / height
+    this.camera.fov = DishScene.fieldOfView(this.camera.aspect)
     this.camera.updateProjectionMatrix()
+  }
+
+  /**
+   * The vertical field of view a given frame is looked at through.
+   *
+   * Three states the angle vertically, so the same lens on a taller, narrower
+   * frame sees less of the bowl across it — and a phone held upright is narrow
+   * enough to cut the rim off on both sides at the opening distance. Below the
+   * frame the distances were chosen for, the lens is opened up by exactly the
+   * amount that holds the width it would have had, which leaves every landscape
+   * frame looking at precisely what it looked at before.
+   * @param aspect - The frame's width over its height
+   * @returns The angle to look through, in degrees
+   */
+  private static fieldOfView(aspect: number): number {
+    if (aspect >= CAMERA_REFERENCE_ASPECT) {
+      return CAMERA_FIELD_OF_VIEW
+    }
+
+    // Half-angles, because the tangent identity that carries the width across
+    // is stated about the half-angle and not the whole one
+    const half = MathUtils.degToRad(CAMERA_FIELD_OF_VIEW) / 2
+    const widened = Math.atan(Math.tan(half) * CAMERA_REFERENCE_ASPECT / aspect)
+
+    return Math.min(MathUtils.radToDeg(widened) * 2, CAMERA_MAX_FIELD_OF_VIEW)
   }
 
   /**

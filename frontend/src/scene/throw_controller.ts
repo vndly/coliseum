@@ -11,7 +11,7 @@ import {AIM_DOT_COUNT,
   THROW_CLEARANCE_HEIGHT,
   THROW_CLEARANCE_RADIUS,
   THROW_DESCENT_ANGLE,
-  THROW_FAN_RADIUS,
+  THROW_FAN_SPACING,
   THROW_FLIGHT_TIME,
   THROW_LAUNCH_CAMERA_MARGIN,
   THROW_MAX_RADIUS,
@@ -454,7 +454,7 @@ export class ThrowController {
     // that clears the bowl by the ring's radius carries the whole fan over.
     const radius = Math.hypot(this.launchOrigin.x, this.launchOrigin.z)
     const clearance = count > 1
-      ? THROW_CLEARANCE_RADIUS + THROW_FAN_RADIUS
+      ? THROW_CLEARANCE_RADIUS + ThrowController.fanRadius(count)
       : THROW_CLEARANCE_RADIUS
 
     if (radius < clearance && this.launchOrigin.y < THROW_CLEARANCE_HEIGHT) {
@@ -542,13 +542,84 @@ export class ThrowController {
       return new Vector3()
     }
 
-    const angle = index / count * Math.PI * 2
+    const ring = ThrowController.ringOf(index)
+
+    // What is actually on this ring, rather than what it could have held. The
+    // outermost one is rarely full, and spreading what is on it over its whole
+    // circle is what keeps a part-filled ring even.
+    const onRing = Math.min(count - ring.first, ring.capacity)
+    const angle = (index - ring.first) / onRing * Math.PI * 2
+    const radius = ring.number * THROW_FAN_SPACING
 
     return new Vector3(
-      Math.cos(angle) * THROW_FAN_RADIUS,
+      Math.cos(angle) * radius,
       0,
-      Math.sin(angle) * THROW_FAN_RADIUS,
+      Math.sin(angle) * radius,
     )
+  }
+
+  /**
+   * How far the outermost die of a fan sits from the launch.
+   * @param count - How many dice the fan holds
+   * @returns The radius one clearance test has to carry over the bowl
+   */
+  private static fanRadius(count: number): number {
+    return count < 2 ? 0 : ThrowController.ringOf(count - 1).number * THROW_FAN_SPACING
+  }
+
+  /**
+   * Which ring a die of a fan belongs to, counting outwards from the first.
+   *
+   * Answered from the die's own place in the hand and nothing else, so the ring
+   * a die sits on never moves as the hand around it grows — which is what keeps
+   * a hand of six thrown from exactly the circle it has always been thrown from.
+   *
+   * Six dice fit the first ring, twelve the second and eighteen the third:
+   * thirty-six between them, which is every die a match can hold, inside a
+   * radius of three spacings. That bound is the whole reason for filling
+   * outwards rather than opening one ring up — a single circle wide enough to
+   * hold a large hand apart is wider than the bowl, and the dice on it come
+   * down on the table, where a die leaves the match for good.
+   * @param index - Which die of the fan this is
+   * @returns Its ring's number, that ring's capacity, and the first die on it
+   */
+  private static ringOf(index: number): {number: number,
+    capacity: number,
+    first: number} {
+    let number = 1
+    let first = 0
+    let capacity = ThrowController.ringCapacity(number)
+
+    while (index >= first + capacity) {
+      first += capacity
+      number += 1
+      capacity = ThrowController.ringCapacity(number)
+    }
+
+    return {
+      number: number,
+      capacity: capacity,
+      first: first,
+    }
+  }
+
+  /**
+   * How many dice a ring is allowed to hold.
+   *
+   * A ring's radius is its number times the spacing, so its circumference is
+   * that many spacings around — which is the figure taken here. Circumference
+   * is the generous reading, since dice sit a chord apart and a chord is
+   * shorter than the arc it subtends, so the figure is checked rather than
+   * trusted: at six, twelve and eighteen the chords come out at 1.20, 1.24 and
+   * 1.25 spacings, so every ring a match can reach holds its dice at least a
+   * spacing apart. The exact chord form is deliberately not used — it evaluates
+   * to a hair under six on the first ring and would quietly move a hand of six
+   * onto two rings.
+   * @param ring - Which ring, counting outwards from the first
+   * @returns How many dice it holds
+   */
+  private static ringCapacity(ring: number): number {
+    return Math.floor(2 * Math.PI * ring)
   }
 
   /**

@@ -52,8 +52,10 @@ export const TABLE_SHEEN_ROUGHNESS = 0.8
 // frame does not arrive over a white page
 export const BACKGROUND_COLOR = 0x0e1210
 
-export const FOG_NEAR = 38 // Well beyond the bowl, so the bowl is never fogged
-export const FOG_FAR = 180
+// The fog is stated with the camera below rather than here: where it begins is
+// measured against how far the orbit can be pulled back, and it can only be
+// written once that distance exists.
+
 // Ambient image-based light. It fills the bowl's interior, but pushed much
 // past this it flattens the key light out and lifts the dark wood to milk
 // chocolate and the baize to mint.
@@ -81,11 +83,49 @@ export const CAMERA_FIELD_OF_VIEW = 40 // Longer lens; flatters a small object
 export const CAMERA_NEAR = 0.1
 export const CAMERA_FAR = 400
 export const CAMERA_TARGET_HEIGHT = 1.5 // Orbit about the interior, not the foot
+// Both distances are stated for a frame at least as wide as the reference
+// aspect below. A narrower one is answered by opening the lens rather than by
+// moving these, so that what a landscape frame sees is exactly what it always
+// saw.
 export const CAMERA_MIN_DISTANCE = 16.5 // Closest approach that still holds the whole rim in frame
 export const CAMERA_MAX_DISTANCE = 39
 export const CAMERA_START_DISTANCE = 21 // Leaves the bowl about two thirds of the frame height
 export const CAMERA_START_AZIMUTH_ANGLE = Math.PI * 0.15
 export const CAMERA_DAMPING_FACTOR = 0.06
+
+/**
+ * Where the fog begins, and where it is total.
+ *
+ * Fog is depth from the camera, so the bowl is only clear of it while the
+ * furthest the orbit can be pulled back, plus the bowl's own reach past the
+ * point it orbits, still falls in front of the near plane. Written as that sum
+ * rather than as a figure that happens to clear it, because the two were
+ * unrelated before and the orbit had already grown past the fog — the bowl was
+ * being washed toward the background at full zoom-out, which is exactly what
+ * this is here to prevent.
+ */
+export const FOG_NEAR = CAMERA_MAX_DISTANCE + BOWL_RIM_RADIUS
+export const FOG_FAR = 180
+
+/**
+ * The frame the camera distances above are written for.
+ *
+ * The field of view is vertical, so a narrow frame sees less of the bowl across
+ * than a wide one at the same distance — and every distance above was chosen by
+ * eye on a landscape frame. Below this the lens is opened up to hold the same
+ * width, rather than leaving a phone held upright looking at a bowl with its
+ * sides cut off.
+ */
+export const CAMERA_REFERENCE_ASPECT = 0.9
+
+/**
+ * The widest the lens is opened to hold that frame.
+ *
+ * A very tall frame would ask for a fisheye, which costs more in distortion
+ * than the cropping it buys back. Past this the bowl is allowed to overrun the
+ * sides again.
+ */
+export const CAMERA_MAX_FIELD_OF_VIEW = 65
 
 /**
  * Straight down. Not exactly zero — at a true polar angle of zero the azimuth
@@ -521,18 +561,19 @@ export const THROW_FLIGHT_TIME = 0.22 // Seconds
 export const THROW_MAX_RADIUS = 8
 
 /**
- * How far out from the launch the dice of an all-in throw are spread.
+ * The least distance a fan leaves between the centres of two of its dice.
  *
- * A whole hand leaves on one gesture, and six bodies created at the same point
- * are six bodies overlapping — which a solver answers by firing them apart. The
- * dice are placed around a ring of this radius instead: at six of them that is
- * a circumference of over seven die widths, so no two start out touching.
+ * A whole hand leaves on one gesture, and bodies created at the same point are
+ * bodies overlapping — which a solver answers by firing them apart. This is the
+ * figure the ring below is sized to hold, and it is stated as a separation
+ * rather than as a radius because the radius that achieves it depends on how
+ * many dice are being spread around it.
  *
- * The ring is horizontal, which is what lets one clearance test cover the whole
- * fan. Every die of it sits at the launch's own height, so a launch lifted
- * clear of the bowl carries all six over with it.
+ * Measured centre to centre as a chord, not along the arc: the arc is longer
+ * than the gap actually between two dice, and reading the ring off it is what
+ * makes a ring look roomier than it is.
  */
-export const THROW_FAN_RADIUS = DIE_SIZE * 1.2
+export const THROW_FAN_SPACING = DIE_SIZE * 1.2
 
 /**
  * How far from the bowl's axis a throw nobody aimed may land.

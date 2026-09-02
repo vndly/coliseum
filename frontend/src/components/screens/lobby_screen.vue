@@ -32,6 +32,7 @@ const router = useRouter()
 const nameField = useTemplateRef<HTMLInputElement>('nameField')
 const codeField = useTemplateRef<HTMLInputElement>('codeField')
 const picker = useTemplateRef<HTMLElement>('picker')
+const pickerButton = useTemplateRef<HTMLButtonElement>('pickerButton')
 
 // Neither is a ref: both are only ever the call that ends a subscription
 let stopWatchingMatches: (() => void) | null = null
@@ -150,7 +151,28 @@ function remember(name: string, color: number): void {
  */
 function onPickColor(skin: number): void {
   playerColor.value = skin
+  closePalette()
+}
+
+/**
+ * Puts the palette away and gives the button back whatever focus it was holding.
+ *
+ * The palette is dropped from the page rather than hidden, so closing it while
+ * a swatch is focused destroys the focused element — and focus falls to the
+ * document, where the next tab starts again from the top and nothing has said
+ * the colours closed. It goes back to the button that opened them, which is
+ * where somebody who has just chosen a colour is standing.
+ */
+function closePalette(): void {
+  const wasInside = picker.value?.contains(document.activeElement) ?? false
+
   picking.value = false
+
+  if (wasInside) {
+    void nextTick(() => {
+      pickerButton.value?.focus()
+    })
+  }
 }
 
 /**
@@ -535,20 +557,20 @@ function onPaste(): void {
 
             <div ref="picker" class="picker">
               <button
+                ref="pickerButton"
                 type="button"
                 class="picker__button"
                 :class="{'picker__button--open': picking}"
                 :aria-label="`Dice colour: ${colorName}`"
-                aria-haspopup="true"
                 :aria-expanded="picking"
                 :disabled="busy"
                 @click="picking = !picking"
-                @keydown.esc="picking = false"
+                @keydown.esc="closePalette"
               >
                 <DieFace :value="1" :skin="playerColor" />
               </button>
 
-              <ul v-if="picking" class="palette" @keydown.esc="picking = false">
+              <ul v-if="picking" class="palette" @keydown.esc="closePalette">
                 <li v-for="(skin, index) in DIE_SKINS" :key="skin.name">
                   <button
                     type="button"
