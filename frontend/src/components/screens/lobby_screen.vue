@@ -342,7 +342,18 @@ async function runJoin(): Promise<void> {
   // what the player would be shown is the store's account of its own path
   // rather than the game's account of their code. Four characters is not the
   // whole of the answer — the alphabet is the rest of it.
-  const refusal = isMatchCode(typed)
+  const known = isMatchCode(typed)
+
+  // The clear above has to reach the screen before the refusal is written over
+  // it. A join that goes to the database gets that for free from its own wait;
+  // a code refused here has nothing to wait on, and cleared and rewritten
+  // inside one flush is a line that never changed — so a second bad code in a
+  // row is a refusal the alert never reads out at all.
+  if (!known) {
+    await nextTick()
+  }
+
+  const refusal = known
     ? await takeSeat(typed)
     : 'No match with that code.'
 
@@ -545,6 +556,7 @@ function onPaste(): void {
                     :class="{'palette__option--taken': index === playerColor}"
                     :aria-label="skin.name"
                     :aria-pressed="index === playerColor"
+                    :disabled="busy"
                     @click="onPickColor(index)"
                   >
                     <DieFace :value="1" :skin="index" />
@@ -914,6 +926,7 @@ function onPaste(): void {
 .switch__option:disabled,
 .field__input:disabled,
 .picker__button:disabled,
+.palette__option:disabled,
 .counts__option:disabled,
 .paste:disabled {
     opacity: 0.45;

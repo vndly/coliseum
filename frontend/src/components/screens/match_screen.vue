@@ -454,6 +454,16 @@ function onState(next: MatchState, confirmed: boolean): void {
  * @param record - The throw, as its thrower described it
  */
 function onThrow(record: ThrowRecord): void {
+  // A throw the match has already judged is one whose dice are in the bowl this
+  // player has been handed, or gone out of it — and the two listeners are
+  // independent, so the verdict is free to arrive first. Played from here it
+  // would build dice the bowl already holds, under identifiers it is already
+  // using, and hand a hand back twice for one die when this table's bowl is
+  // next published.
+  if (record.seq <= (state.value?.verdict?.seq ?? 0)) {
+    return
+  }
+
   scene?.applyThrow(record.dice)
 }
 
