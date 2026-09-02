@@ -2,7 +2,6 @@
 
 ## TODO
 
-- Reduce message of who's turn is
 - Reorder swatch dice
 - Apocalypse revire
 - Allow to throw die with one click

@@ -39,7 +39,7 @@ const COPIED_MILLISECONDS = 2000 // How long the copy button holds its answer
 const TAKEOVER_MILLISECONDS = 5000
 
 /** How long a turn is called for before the call fades and the table is let go. */
-const TURN_CALL_MILLISECONDS = 1500
+const TURN_CALL_MILLISECONDS = 1000
 
 /**
  * How long a bot is left to think, at its quickest and its slowest.
