@@ -2,6 +2,7 @@
 
 ## TODO
 
+- Reorder swatch dice
 - Allow to throw die with one click
 - Configure how many dice per player
 - Tournament
