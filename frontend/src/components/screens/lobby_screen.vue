@@ -334,7 +334,17 @@ async function takeSeat(match: string): Promise<string> {
 async function runJoin(): Promise<void> {
   error.value = ''
 
-  const refusal = await takeSeat(normaliseMatchCode(code.value))
+  const typed = normaliseMatchCode(code.value)
+
+  // Asked here as well as of the clipboard, because a code is a document's own
+  // name and this is where one arrives that nobody has read. Left to the
+  // database, a code carrying a slash is not a name a document can have, and
+  // what the player would be shown is the store's account of its own path
+  // rather than the game's account of their code. Four characters is not the
+  // whole of the answer — the alphabet is the rest of it.
+  const refusal = isMatchCode(typed)
+    ? await takeSeat(typed)
+    : 'No match with that code.'
 
   if (refusal === '') {
     return

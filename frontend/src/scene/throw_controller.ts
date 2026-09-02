@@ -209,13 +209,6 @@ export class ThrowController {
    * can be added and removed as a listener without losing its receiver.
    */
   private readonly onPointerDown = (event: PointerEvent): void => {
-    // Someone else's turn. Nothing is recorded, because a gesture that cannot
-    // begin cannot strand anything — and the next primary pointer clears the
-    // set anyway, so the turn arriving mid-touch leaves nothing behind.
-    if (!this.enabled) {
-      return
-    }
-
     // A primary pointer is by definition the first of a fresh gesture, so
     // anything still recorded as down is stale — an up that never arrived.
     // Without this the set could strand an entry and refuse every later throw.
@@ -223,7 +216,18 @@ export class ThrowController {
       this.downPointers.clear()
     }
 
+    // Recorded whether or not the gesture is open, and before the turn is
+    // asked about. A finger already on the glass when the turn arrives is
+    // still a finger on the glass, and the next one down is not primary — so
+    // nothing would ever clear the set on its behalf, and the two-finger guard
+    // below would count one pointer where there are two and let an orbit throw
+    // a die.
     this.downPointers.add(event.pointerId)
+
+    // Someone else's turn
+    if (!this.enabled) {
+      return
+    }
 
     // A gesture begun on any other button is the camera's — the right one
     // orbits. This is not what catches the button pressed part way through an

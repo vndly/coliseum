@@ -93,6 +93,7 @@ export class DishScene {
   private resolutionStage: 'waiting' | 'removing' | 'returning' = 'waiting'
   private resolutionElapsed = 0
   private announceResolved = false // Whether the bowl still to be applied ends a verdict
+  private deferred: ThrownDie[] = [] // Throws that arrived while the table was still catching up
 
   /**
    * Called when a gesture on this canvas finishes as a throw.
@@ -258,11 +259,31 @@ export class DishScene {
       return
     }
 
+    // A verdict still playing, or a bowl still waiting to go on, is a whole
+    // state described before this throw existed — and both are applied by
+    // taking every die they do not name back out of the world. Dice built now
+    // would be deleted by the very next one. Held instead, and thrown the
+    // moment the table has caught up — or forgotten where a newer bowl reaches
+    // holdBowl first, having already accounted for them.
+    if (this.resolution !== null || this.pending !== null) {
+      this.deferred.push(...dice)
+
+      return
+    }
+
+    const before = this.dice.count
+
     for (const die of dice) {
       this.dice.throw(this.physics, die.id, die.skin, die.launch)
     }
 
-    this.throwing = 0
+    // Only a throw that actually put a die in the world is a throw to wait on.
+    // A world that never started drops every die it is given, and a settle
+    // clock armed over that comes to rest on a bowl this throw never reached —
+    // which is then published as the match's own.
+    if (this.dice.count > before) {
+      this.throwing = 0
+    }
   }
 
   /**
@@ -284,8 +305,7 @@ export class DishScene {
     this.resolutionStage = 'waiting'
     this.resolutionElapsed = 0
     this.announceResolved = true
-    this.pending = bowl
-    this.pendingElapsed = 0
+    this.holdBowl(bowl)
   }
 
   /**
@@ -299,8 +319,25 @@ export class DishScene {
    * @param bowl - Every die the match says is in the bowl
    */
   reconcileBowl(bowl: DieSnapshot[]): void {
+    this.holdBowl(bowl)
+  }
+
+  /**
+   * Holds a bowl from the match until this table has stopped moving.
+   *
+   * Whatever throws were being held are forgotten as it arrives, and that is
+   * the whole reason holding one is safe. A bowl says where every die ended up
+   * and it was written after those throws were made, so their dice are already
+   * named in it and restoring it is what builds them. Thrown again on top of
+   * that they would be built a second time under identifiers the bowl is
+   * already using — and a bowl holding one die twice is a bowl that pairs it
+   * with itself, in a verdict this player would then publish as the match's.
+   * @param bowl - Every die the match says is in the bowl
+   */
+  private holdBowl(bowl: DieSnapshot[]): void {
     this.pending = bowl
     this.pendingElapsed = 0
+    this.deferred.length = 0
   }
 
   /**
@@ -384,16 +421,13 @@ export class DishScene {
       }
     }
 
-    // Rapier is still loading. Everything waiting is held rather than dropped:
-    // the first bowl a player is given is the match's opening state, and
-    // arriving before the world does is the normal case rather than the
-    // unlucky one.
-    if (this.physics.world === null) {
-      return
-    }
-
     // The bowl a verdict ends at is the one waiting behind it, so it is held
-    // until the verdict has finished with the dice it is about to take
+    // until the verdict has finished with the dice it is about to take.
+    //
+    // Played out whether or not the world ever started, and so above the test
+    // for one: a verdict is what hands the interface to the next turn, and a
+    // scene with no physics can still show nothing for the right length of
+    // time. Everything this stage calls holds its own peace without a world.
     if (this.resolution !== null) {
       this.advanceResolution(deltaTime)
 
@@ -401,10 +435,25 @@ export class DishScene {
     }
 
     if (this.pending === null) {
+      this.throwDeferred()
+
       return
     }
 
     this.pendingElapsed += deltaTime
+
+    // Rapier is still loading, or never started. The bowl is held rather than
+    // dropped: the first one a player is given is the match's opening state,
+    // and arriving before the world does is the normal case rather than the
+    // unlucky one. What is not held with it is the announcement — a verdict
+    // that has finished playing has to let the interface go whether or not
+    // there was ever a world to play it in, or the match is over for this
+    // player without anything having ended it.
+    if (this.physics.world === null) {
+      this.announceResolution()
+
+      return
+    }
 
     if (!this.dice.isSettled && this.pendingElapsed < SETTLE_TIMEOUT) {
       return
@@ -415,11 +464,37 @@ export class DishScene {
     // Taken off before it is applied, so a bowl cannot be applied twice
     this.pending = null
     this.dice.restore(this.physics, bowl)
+    this.announceResolution()
+    this.throwDeferred()
+  }
 
+  /**
+   * Says that a verdict has finished, once, to whoever is waiting to hear it.
+   */
+  private announceResolution(): void {
     if (this.announceResolved) {
       this.announceResolved = false
       this.onResolved?.()
     }
+  }
+
+  /**
+   * Makes the throws that arrived while the table was still catching up.
+   *
+   * Only ever called with nothing queued in front of them, so the dice they
+   * build are safe from the next whole-state apply, and what they make is an
+   * ordinary throw — settle clock and all.
+   */
+  private throwDeferred(): void {
+    if (this.deferred.length === 0) {
+      return
+    }
+
+    const held = this.deferred
+
+    // Taken off before they are made, so applyThrow cannot queue them again
+    this.deferred = []
+    this.applyThrow(held)
   }
 
   /**

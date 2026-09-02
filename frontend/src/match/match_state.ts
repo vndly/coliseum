@@ -1,4 +1,4 @@
-import {MAX_PLAYERS, STARTING_POOL} from '@/match/rules'
+import {MAX_PLAYERS, MIN_PLAYERS, STARTING_POOL} from '@/match/rules'
 import {BONE_SKIN, isDieSkin} from '@/scene/die_skins'
 import type {DieSnapshot, ThrowLaunch, ThrowResolution, ThrownDie} from '@/scene/die_state'
 
@@ -235,6 +235,32 @@ function readFace(value: unknown): number | null {
   return face
 }
 
+/**
+ * Reads how many seats the match has.
+ *
+ * Bounded before it is built, in the same way and for the same reason a hand
+ * is: this number is handed to the interface as a length, so a stored 2.5 is an
+ * invalid array length and a stored billion is an allocation that takes the tab
+ * down with it. Bounded here rather than only beside the lobby's own list, so
+ * that the match screen inherits it too: it draws the seats from this number
+ * as well, and had nothing of its own saying what it could be. The lobby's
+ * check stands where it is, nearest the value it hands to a renderer, and now
+ * answers a question this has already answered. Nothing this game writes is
+ * outside the range, so what this refuses is a document written by something
+ * that is not this game.
+ * @param value - The field as it came out of the document
+ * @returns The seat count, or null if it is not one a match could have been made for
+ */
+function readSeatCount(value: unknown): number | null {
+  const count = readNumber(value)
+
+  if (count === null || !Number.isInteger(count)) {
+    return null
+  }
+
+  return count >= MIN_PLAYERS && count <= MAX_PLAYERS ? count : null
+}
+
 function readDieSnapshot(value: unknown): DieSnapshot | null {
   if (!isRecord(value)) {
     return null
@@ -467,7 +493,7 @@ export function parseMatchState(code: string, value: unknown): MatchState | null
     return null
   }
 
-  const playerCount = readNumber(value.playerCount)
+  const playerCount = readSeatCount(value.playerCount)
   const phase = readString(value.phase)
   const players = readPlayers(value.players)
   const pools = readPools(value.pools)
