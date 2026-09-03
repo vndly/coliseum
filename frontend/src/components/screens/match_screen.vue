@@ -102,6 +102,8 @@ let botTimer = 0 // The pending move of the bot whose turn it is, so it can be c
 let leaveAllowed = false // Set by every departure made here, so the guard lets those through
 let unmounted = false // Whether the screen has gone, for the connection still being opened
 let releaseBotSeats: (() => void) | null = null // Gives up the claim on the bot seats
+let screenWakeLock: WakeLockSentinel | null = null // What is keeping the device awake, once it is
+let askingScreenAwake = false // Whether a request for that lock is already in the air
 
 const state = shallowRef<MatchState | null>(null)
 const uid = ref('')
@@ -1010,6 +1012,81 @@ function claimBotSeats(): void {
 }
 
 /**
+ * Asks the device not to put its screen out while the match is on it.
+ *
+ * A match is watched far more than it is touched: a player waiting on three
+ * other people to throw goes minutes without pressing anything, which is about
+ * how long a phone waits before it sleeps. So the lock is held over the whole
+ * screen rather than over this player's own turn, since the waiting is the part
+ * that needs it.
+ *
+ * Every way it can fail leaves a match that plays exactly as it did before, and
+ * none of them is worth a word on the screen: a browser that has never heard of
+ * the lock, one that refuses because the page was hidden at the moment of
+ * asking, and one that gives it up again under battery saver.
+ */
+async function holdScreenAwake(): Promise<void> {
+  // Nothing to do for a browser without the API, for a lock still holding the
+  // screen, or for one already being asked for — two requests would leave the
+  // first sentinel held by nothing that could ever release it.
+  //
+  // The sentinel is asked whether it is still holding rather than merely being
+  // there, because the browser takes a lock back on its own and the event
+  // saying so is a separate errand. Trusted to have arrived first, a page
+  // coming back to a sentinel that is already spent would take itself for
+  // covered and never ask again.
+  if (typeof navigator.wakeLock === 'undefined' || askingScreenAwake) {
+    return
+  }
+
+  if (screenWakeLock !== null && !screenWakeLock.released) {
+    return
+  }
+
+  askingScreenAwake = true
+
+  try {
+    const sentinel = await navigator.wakeLock.request('screen')
+
+    // Handed straight back for a screen that has gone while the request was in
+    // the air: the teardown that would have released it has already run
+    if (unmounted) {
+      await sentinel.release()
+
+      return
+    }
+
+    screenWakeLock = sentinel
+
+    // The browser takes the lock back on its own whenever the page is hidden,
+    // and says so here. Forgotten at that point so that the page coming back
+    // asks for it again rather than believing it still holds one.
+    sentinel.addEventListener('release', () => {
+      if (screenWakeLock === sentinel) {
+        screenWakeLock = null
+      }
+    })
+  } catch {
+    // Refused. Asked again the next time the page is shown.
+  } finally {
+    askingScreenAwake = false
+  }
+}
+
+/**
+ * Asks for the lock again once the page is being looked at again.
+ *
+ * The browser gives no lock to a page nobody can see and takes back the one it
+ * had — a call answered, the phone put face down — so coming back to the match
+ * is the moment to ask for another.
+ */
+function onVisibilityChange(): void {
+  if (document.visibilityState === 'visible') {
+    void holdScreenAwake()
+  }
+}
+
+/**
  * Answers the back button with a question rather than with the lobby.
  *
  * A match is left by leaving its address, and the back button is the one way to
@@ -1059,6 +1136,9 @@ onMounted(() => {
   void connect()
 
   claimBotSeats()
+
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  void holdScreenAwake()
 })
 
 onBeforeUnmount(() => {
@@ -1075,6 +1155,19 @@ onBeforeUnmount(() => {
   client = null
   scene?.dispose()
   scene = null
+
+  // Last, behind the connection and the scene. Nothing above it needs the
+  // screen awake, and everything above it matters more than whether this
+  // browser's own release call comes back.
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+
+  // Handed back rather than left to the page, since a match is left far more
+  // often than the tab it was open in is closed
+  void screenWakeLock?.release().catch(() => {
+    // Already gone, which is the outcome either way
+  })
+
+  screenWakeLock = null
 })
 </script>
 
