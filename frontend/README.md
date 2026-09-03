@@ -2,7 +2,15 @@
 
 ## TODO
 
-- What other features we can add?
+- Audio
+  - Background music
+  - Dice collision
+  - Dice match up
+  - Dice flush
+  - Dice elimination (i.e. sixes)
+  - Player won
+  - Player lost
+
 - Allow to throw a die with a double click
 - Configure the inital amount of dice per player
 - Tournament
