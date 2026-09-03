@@ -121,6 +121,28 @@ export class DishScene {
    */
   onResolved: (() => void) | null = null
 
+  /**
+   * Called once the physics world has started, which is the moment this scene
+   * can carry a throw at all.
+   *
+   * Rapier arrives a moment after the first frame does, and until it has there
+   * is nowhere to build a die. A throw made into that gap is charged to a hand
+   * and written to the match by the screen, and then never happens here — no
+   * die is built, so nothing ever settles, and the turn it was meant to be part
+   * of never ends. The screen holds its own controls shut until it hears this.
+   */
+  onPhysicsStarted: (() => void) | null = null
+
+  /**
+   * Called with the reason if the physics world never starts at all.
+   *
+   * A WebAssembly module that will not instantiate is not a slow load; it is a
+   * scene that can never hold a die. Told rather than logged, because the
+   * player is otherwise left looking at an empty bowl that answers nothing they
+   * press, with nothing on screen saying why.
+   */
+  onPhysicsFailed: ((reason: unknown) => void) | null = null
+
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new WebGLRenderer({
       canvas: canvas,
@@ -178,8 +200,11 @@ export class DishScene {
     // Deliberately not awaited. Rapier is a WASM module and takes a moment to
     // arrive; the bowl paints on the first frame either way, and a press that
     // lands before physics does simply throws nothing.
-    this.physics.initialize(this.dish.shell).catch((error: unknown) => {
+    this.physics.initialize(this.dish.shell).then(() => {
+      this.onPhysicsStarted?.()
+    }).catch((error: unknown) => {
       console.error('The physics world failed to start; dice cannot be thrown', error)
+      this.onPhysicsFailed?.(error)
     })
 
     this.resizeObserver = new ResizeObserver(() => {
@@ -287,6 +312,30 @@ export class DishScene {
     if (this.dice.count > before) {
       this.throwing = 0
     }
+  }
+
+  /**
+   * Takes a throw back out again, for a throw that turned out never to have
+   * been made.
+   *
+   * The local player's own throw is shown before it is written, so that the
+   * hand that made it does not wait on a database. A write that is then refused
+   * leaves those dice standing in a bowl the match has never heard of, and the
+   * retry the error line invites is given the same sequence number and so the
+   * same identifiers — a bowl holding every die of the throw twice, which pays
+   * the thrower twice for each of them.
+   *
+   * The settle clock goes with them. It was armed for this throw and there is
+   * now nothing for it to come to rest on; left running it would declare a bowl
+   * at rest that this player would publish as the match's own.
+   * @param dice - The throw to withdraw, exactly as it was applied
+   */
+  withdrawThrow(dice: ThrownDie[]): void {
+    const identifiers = dice.map((die) => die.id)
+
+    this.deferred = this.deferred.filter((die) => !identifiers.includes(die.id))
+    this.dice.withdraw(this.physics, identifiers)
+    this.throwing = null
   }
 
   /**

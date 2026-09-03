@@ -159,6 +159,13 @@ export class Dice {
 
   /**
    * Puts a new die into the world, already moving.
+   *
+   * A name already in the bowl is refused rather than built beside the die
+   * wearing it. Identifiers are what a verdict names dice by, so a bowl
+   * holding one twice pairs it with itself and pays a hand twice for one
+   * physical die — and this player publishes that bowl as the match's own.
+   * Refused here rather than only where the duplicates come from, because the
+   * bowl is the one place every route into it has to pass.
    * @param physics - The world it is thrown into; nothing happens until it is ready
    * @param identifier - The name both players know this die by
    * @param skin - The colour it is painted in, which came with the throw
@@ -167,7 +174,7 @@ export class Dice {
   throw(physics: PhysicsWorld, identifier: string, skin: number, launch: ThrowLaunch): void {
     const world = physics.world
 
-    if (world === null || this.dice.length >= DIE_LIMIT) {
+    if (world === null || this.dice.length >= DIE_LIMIT || this.holds(identifier)) {
       return
     }
 
@@ -208,6 +215,37 @@ export class Dice {
       if (identifiers.includes(die.id)) {
         die.markOutOfPlay()
       }
+    }
+  }
+
+  /**
+   * Takes the named dice straight back out of the world.
+   *
+   * Nothing is played out and nothing is animated: these are dice that turned
+   * out never to have been thrown, rather than dice a verdict has taken, so
+   * what is wanted is the bowl as it stood before them.
+   * @param physics - The world their bodies live in
+   * @param identifiers - The dice to withdraw
+   */
+  withdraw(physics: PhysicsWorld, identifiers: string[]): void {
+    const world = physics.world
+
+    if (world === null) {
+      return
+    }
+
+    // Walked backwards, so that splicing a die out cannot move one that has
+    // not been looked at yet past the cursor
+    for (let index = this.dice.length - 1; index >= 0; index--) {
+      const die = this.dice[index]
+
+      if (die === undefined || !identifiers.includes(die.id)) {
+        continue
+      }
+
+      this.group.remove(die.object)
+      die.remove(world)
+      this.dice.splice(index, 1)
     }
   }
 
@@ -322,6 +360,15 @@ export class Dice {
     this.removedMaterial.dispose()
     this.matchedMaterial.dispose()
     this.washPipMaterial.dispose()
+  }
+
+  /**
+   * Whether a die of this name is already in the bowl.
+   * @param identifier - The name to look for
+   * @returns Whether the bowl is already using it
+   */
+  private holds(identifier: string): boolean {
+    return this.dice.some((die) => die.id === identifier)
   }
 
   /**

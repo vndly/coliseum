@@ -67,10 +67,12 @@ let copiedTimer = 0 // The pending reset of the copy button, so it can be called
 let turnCallTimer = 0 // The pending end of the turn call, so it can be called off
 let botTimer = 0 // The pending move of the bot whose turn it is, so it can be called off
 let leaveAllowed = false // Set by every departure made here, so the guard lets those through
+let unmounted = false // Whether the screen has gone, for the connection still being opened
 
 const state = shallowRef<MatchState | null>(null)
 const uid = ref('')
 const busy = ref(false) // A throw made here is still in the air
+const simulating = ref(false) // Whether the scene has a physics world to throw into
 const resolving = ref(false) // A verdict is being played out, here and on every other table
 const calledTurn = ref(-1) // The seat the call names, once a turn has been called
 const calling = ref(false) // Whether that call is up, and the table held for it
@@ -169,8 +171,16 @@ const callLine = computed<string>(() => {
 // Closed again for as long as a turn is being called. The layer that carries
 // the call is already holding every pointer on the screen; this is what stops
 // the one press that layer cannot — a Pass the keyboard still has hold of.
+//
+// And closed until there is a simulation to throw into at all. A throw is
+// written to the match before the dice it names ever come to rest, and a scene
+// with no physics world never brings them to rest — the hand is charged, the
+// turn moves nowhere, and nothing here would ever open again. The takeover
+// already refuses to publish a bowl from a scene like that; this refuses to
+// make one.
 const canThrow = computed<boolean>(
   () => playing.value
+    && simulating.value
     && isMyTurn.value
     && !busy.value
     && !resolving.value
@@ -194,7 +204,9 @@ const activeBot = computed<MatchPlayer | null>(() => {
  * Held off by the same things that close the player's own controls, and for
  * the same reasons: a throw or a pass landing while the dice are still moving,
  * while the verdict is still being written, or while the turn is still being
- * called would be answered against a bowl the match has not finished with.
+ * called would be answered against a bowl the match has not finished with —
+ * and a bot throwing into a scene with no physics locks the match up exactly
+ * as a player doing so would.
  */
 const botMove = computed<BotMove | null>(() => {
   const match = state.value
@@ -204,7 +216,7 @@ const botMove = computed<BotMove | null>(() => {
     return null
   }
 
-  if (busy.value || resolving.value || calling.value || !judged.value) {
+  if (!simulating.value || busy.value || resolving.value || calling.value || !judged.value) {
     return null
   }
 
@@ -513,6 +525,12 @@ function onLaunch(launches: ThrowLaunch[]): void {
   pendingThrow = submitted
 
   submitted.catch((reason: unknown) => {
+    // The throw never landed, so the dice it put on this table are dice no
+    // other player has and the match has never heard of. Taken back out, so
+    // that the retry the line below invites builds them once rather than
+    // beside the copies already standing there — the sequence number is free
+    // again, so the retry gives them the very same identifiers.
+    scene?.withdrawThrow(dice)
     busy.value = false
     error.value = describe(reason)
   })
@@ -741,9 +759,27 @@ function isOut(player: MatchPlayer): boolean {
   return isSpent(player.uid)
 }
 
+/**
+ * Opens this player's connection to the match, and begins following it.
+ *
+ * Opening waits on anonymous sign-in, which is a round trip, and the screen can
+ * be left while it is still in flight — a player who backs out of an address
+ * that still says "Connecting to the match". Unmounting disposes a client that
+ * is still null in that window, so the listeners are checked for a screen to
+ * belong to before they are installed rather than left following the match for
+ * the rest of the tab's life. A leaked one is not idle: it answers an
+ * unseated read by sending the shared router home, out from under whatever
+ * match the player has since walked into.
+ */
 async function connect(): Promise<void> {
   try {
     const opened = await MatchClient.open(code)
+
+    if (unmounted) {
+      opened.dispose()
+
+      return
+    }
 
     uid.value = opened.uid
     client = opened
@@ -785,6 +821,15 @@ onMounted(() => {
   scene.onResolved = () => {
     resolving.value = false
   }
+
+  scene.onPhysicsStarted = () => {
+    simulating.value = true
+  }
+
+  scene.onPhysicsFailed = (reason: unknown) => {
+    error.value = describe(reason)
+  }
+
   scene.start()
 
   // Deliberately not awaited. The bowl paints on the first frame either way,
@@ -793,6 +838,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  unmounted = true
+
   window.clearTimeout(copiedTimer)
   window.clearTimeout(takeoverTimer)
   window.clearTimeout(turnCallTimer)

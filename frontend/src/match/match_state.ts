@@ -86,9 +86,12 @@ export interface MatchState {
    * dice being taken out of the bowl for the same stated reason.
    *
    * It is a replay and not a state: the bowl above already holds where this
-   * ends up. Null before the first throw of a match, and — deliberately —
-   * whenever it cannot be read, since a verdict nobody can follow is only a
-   * missed animation, while a bowl nobody can read is a match nobody can play.
+   * ends up. Null only before the first throw of a match — a stored verdict
+   * that cannot be read fails the whole document instead, because this field
+   * is not only the replay. `judged` on the match screen, and the idempotency
+   * guards in both `submitVerdict` and the takeover behind it, all read it as
+   * the record of what has been judged, and a verdict quietly dropped would
+   * stop every turn and let the next takeover pay a throw's winnings twice.
    */
   verdict: ThrowResolution | null
 
@@ -121,8 +124,24 @@ export interface ThrowRecord {
   dice: ThrownDie[]
 }
 
-/** Every die a match can hold, which is the most any one hand could be. */
-const MATCH_DICE = STARTING_POOL * MAX_PLAYERS
+/**
+ * Every die a match can hold, which is the most any one hand could be.
+ *
+ * One more than the hands were dealt: the opening die is placed into the bowl
+ * when the match starts and no hand ever paid for it, so it is the one die
+ * that can make a hand larger than the deal. A player holding all of them is
+ * the player who has just won, and the document that says so has to be
+ * readable.
+ */
+const MATCH_DICE = STARTING_POOL * MAX_PLAYERS + 1
+
+/**
+ * How far a stored attitude may be from being a unit quaternion before it is
+ * refused. Wide enough for the rounding a number takes on its way through JSON
+ * and back, and far narrower than anything that would reach the simulation as
+ * a scaling.
+ */
+const QUATERNION_TOLERANCE = 1e-3
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -186,10 +205,35 @@ function readTriple(value: unknown): [number, number, number] | null {
   ]
 }
 
+/**
+ * Reads an attitude, which is the only thing four numbers are ever stored as
+ * here.
+ *
+ * Checked for being a unit quaternion as well as for being four numbers,
+ * because this is the one place every stored rotation passes through and what
+ * is downstream of it cannot check for itself. A body built with a rotation
+ * that is not a unit quaternion is a body the simulation never moves and never
+ * puts to sleep, and one of those in the bowl holds the whole table unsettled:
+ * every throw then waits out the settle timeout rather than being answered by
+ * the engine.
+ * @param value - The field as it came out of the document
+ * @returns The attitude, or null if it is not one a die could be resting in
+ */
 function readQuadruple(value: unknown): [number, number, number, number] | null {
   const numbers = readNumbers(value, 4)
 
   if (numbers === null) {
+    return null
+  }
+
+  const norm = Math.hypot(
+    numbers[0] ?? 0,
+    numbers[1] ?? 0,
+    numbers[2] ?? 0,
+    numbers[3] ?? 0,
+  )
+
+  if (Math.abs(norm - 1) > QUATERNION_TOLERANCE) {
     return null
   }
 
@@ -407,11 +451,18 @@ function readPools(value: unknown): Record<string, number[]> | null {
  * Reads the bowl. A single unreadable die fails the whole bowl rather than
  * being skipped: a bowl is applied as a complete state, and one quietly
  * dropped from it would be taken as a die that had left the match.
+ *
+ * Bounded before it is built, in the same way and for the same reason a hand
+ * is, and against the same figure: a bowl holds dice out of the same match the
+ * hands are dealt from, so it can never hold more of them than the match has.
+ * Every entry becomes a rigid body and two meshes when the scene restores it,
+ * so a stored bowl of a few thousand takes the tab down with it — and it would
+ * do so on every player at the table at once.
  * @param value - The field as it came out of the document
  * @returns Every die, or null if any of them could not be read
  */
 function readBowl(value: unknown): DieSnapshot[] | null {
-  if (!isArray(value)) {
+  if (!isArray(value) || value.length > MATCH_DICE) {
     return null
   }
 
@@ -510,6 +561,22 @@ export function parseMatchState(code: string, value: unknown): MatchState | null
     return null
   }
 
+  // Absent before the first throw, and read as strictly as the bowl beside it
+  // once it is there. It looks decorative — it is what plays the dice being
+  // taken out — but three things read it as the record of what has been
+  // judged: the interface asks it whether the turn may act, and both the
+  // verdict write and the takeover behind it ask it whether the throw has
+  // already been paid for. A verdict that will not parse reads as no verdict
+  // at all, which stops every turn and disarms both of those guards, so the
+  // next takeover judges a throw whose winnings have already been paid.
+  const stored = value.verdict
+  const written = stored !== undefined && stored !== null
+  const verdict = written ? readResolution(stored) : null
+
+  if (written && verdict === null) {
+    return null
+  }
+
   if (phase !== 'lobby' && phase !== 'playing' && phase !== 'finished') {
     return null
   }
@@ -525,10 +592,7 @@ export function parseMatchState(code: string, value: unknown): MatchState | null
     bowl: bowl,
     throwSeq: throwSeq,
 
-    // Absent before the first throw, and read leniently: an unreadable verdict
-    // costs a player the sight of the dice being taken out, which is a great
-    // deal less than refusing them the match it happened in
-    verdict: readResolution(value.verdict),
+    verdict: verdict,
 
     winner: readString(value.winner),
     bowlVersion: bowlVersion,
