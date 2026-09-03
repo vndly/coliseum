@@ -412,6 +412,12 @@ export class DishScene {
     this.keyLight.shadow.dispose()
 
     this.environment.dispose()
+
+    // The renderer's own dispose does not give the drawing context back; this
+    // is the call that does. Without it every match visited in one page
+    // session leaves a live context behind, and a browser at its limit takes
+    // the oldest one away from whichever scene is still drawing with it.
+    this.renderer.forceContextLoss()
     this.renderer.dispose()
   }
 
@@ -466,9 +472,19 @@ export class DishScene {
       // step that first moves it. Nothing has moved yet and every other die is
       // still asleep, which is indistinguishable from a bowl at rest.
       const atRest = this.throwing >= SETTLE_MINIMUM && this.dice.isSettled
+      const timedOut = this.throwing >= SETTLE_TIMEOUT
 
-      if (atRest || this.throwing >= SETTLE_TIMEOUT) {
+      if (atRest || timedOut) {
         this.throwing = null
+
+        // The throw is declared over on the timeout whether or not the bowl
+        // agreed, and what happens next reads a value off every die in it. So
+        // a bowl that never settled is settled here, rather than being read
+        // mid-turn and published as the match's own account of the throw.
+        if (!atRest) {
+          this.dice.forceRest()
+        }
+
         this.onSettled?.()
       }
     }

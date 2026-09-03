@@ -158,6 +158,20 @@ export class Dice {
   }
 
   /**
+   * Forces every die in the bowl to a rest none of them reached on their own.
+   *
+   * Only ever asked of a throw the engine never finished: what is read from
+   * the bowl straight afterwards is published as the match's own account of it,
+   * and a die still turning at that instant would be recorded at a value
+   * nobody at the table ever saw it showing.
+   */
+  forceRest(): void {
+    for (const die of this.dice) {
+      die.settle()
+    }
+  }
+
+  /**
    * Puts a new die into the world, already moving.
    *
    * A name already in the bowl is refused rather than built beside the die

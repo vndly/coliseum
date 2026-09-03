@@ -3,7 +3,12 @@ import {fileURLToPath, URL} from 'node:url'
 import vue from '@vitejs/plugin-vue'
 import {defineConfig} from 'vite'
 
-const packageJson = JSON.parse(readFileSync('./package.json', 'utf-8')) as {version: string}
+// Resolved against this file rather than against the working directory, like
+// the alias below it: read cwd-relative, the build only works when Vite is
+// launched from frontend/
+const packageJson = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf-8'),
+) as {version: string}
 
 export default defineConfig({
   plugins: [vue()],

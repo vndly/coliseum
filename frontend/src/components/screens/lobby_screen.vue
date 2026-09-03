@@ -513,6 +513,55 @@ async function runPaste(): Promise<void> {
   }
 }
 
+/**
+ * Takes what has been typed into the code field and puts it into the form a
+ * code is actually in.
+ *
+ * Normalised as it is typed rather than only when it is read. A length cap on
+ * the field alone is enforced by the browser on the insertion, before anything
+ * here sees it — so a code pasted with the space in front of it that copying
+ * one out of a message brings along arrived with its last character cut off,
+ * in a field already full, that nothing could then complete or repair.
+ *
+ * The cap is still a cap, and answers the two ways past it differently. Typing
+ * into a code that is already whole is the insertion the browser used to
+ * refuse outright, so it is refused here too: cutting the tail off instead
+ * would throw away a character the player had already typed, and hand what was
+ * left to the watcher that joins on a whole code. Anything else over-long is
+ * something dropped in from outside, and is taken up to the length of a code
+ * exactly as the field itself used to take it.
+ * @param event - The input event the field raised
+ */
+function onCodeInput(event: Event): void {
+  const field = event.target
+
+  if (!(field instanceof HTMLInputElement)) {
+    return
+  }
+
+  const normalised = normaliseMatchCode(field.value)
+
+  const typed = normalised.length > CODE_LENGTH && code.value.length === CODE_LENGTH
+    ? code.value
+    : normalised.slice(0, CODE_LENGTH)
+
+  // Written back to the field as well as to the code, because what was dropped
+  // was never a character the code held: bound alone, a value that normalises
+  // to what it already was leaves the field showing whitespace nothing counts.
+  // Written only when the two differ, and with the caret carried back by
+  // whatever came out in front of it, so that a correction typed into the
+  // middle of a code does not send the caret to the end.
+  if (field.value !== typed) {
+    const caret = field.selectionStart ?? typed.length
+    const moved = Math.max(caret - (field.value.length - typed.length), 0)
+
+    field.value = typed
+    field.setSelectionRange(moved, moved)
+  }
+
+  code.value = typed
+}
+
 function onCreate(): void {
   void runCreate(false)
 }
@@ -725,18 +774,21 @@ function onPaste(): void {
               <label class="field__label" for="match-code">Match code</label>
 
               <div class="code">
+                <!-- Bound through a handler rather than with v-model, and
+                     with no length cap of its own: both the normalisation and
+                     the cap are applied to what was typed, in that order -->
                 <input
                   id="match-code"
                   ref="codeField"
-                  v-model="code"
                   class="field__input field__input--code"
                   type="text"
-                  :maxlength="CODE_LENGTH"
+                  :value="code"
                   :disabled="busy"
                   autocapitalize="characters"
                   autocomplete="off"
                   spellcheck="false"
                   placeholder="K7QM"
+                  @input="onCodeInput"
                 >
 
                 <button

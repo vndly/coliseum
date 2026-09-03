@@ -2,7 +2,7 @@ import {CoefficientCombineRule, ColliderDesc, RigidBodyDesc} from '@dimforge/rap
 import type {ColliderHandle, RigidBody, World} from '@dimforge/rapier3d-compat'
 import {Quaternion, Vector3} from 'three'
 import type {Material, Mesh, Object3D} from 'three'
-import {readDieFace} from '@/scene/die_state'
+import {readDieFace, restingRotation} from '@/scene/die_state'
 import type {DieSnapshot, ThrowLaunch} from '@/scene/die_state'
 import {DIE_ANGULAR_DAMPING,
   DIE_CORNER_RADIUS,
@@ -246,6 +246,38 @@ export class Die {
       face: readDieFace(attitude),
       skin: this.paint,
     }
+  }
+
+  /**
+   * Forces the die to a rest it never reached on its own.
+   *
+   * Only ever asked of a bowl the engine has given up on. The die is stopped
+   * where it is and turned onto the nearest attitude it could be resting in,
+   * so that the value read off it a moment later is a value it is genuinely
+   * showing rather than whichever face was uppermost as it went past — and so
+   * that every other player, who sets their own die from what is published
+   * here, is given an attitude a die can actually sit in.
+   *
+   * A die on its way out of the match is left alone. Its exit is already
+   * running, it is not in the bowl being published, and touching it here would
+   * put it back in.
+   */
+  settle(): void {
+    if (this.outOfPlay) {
+      return
+    }
+
+    const rotation = this.body.rotation()
+    const attitude = new Quaternion(rotation.x, rotation.y, rotation.z, rotation.w)
+
+    this.body.setLinvel(AT_REST, false)
+    this.body.setAngvel(AT_REST, false)
+    this.body.setRotation(restingRotation(attitude), false)
+
+    // Put down rather than merely stopped: left awake, the very next step
+    // drops it back out of the attitude it has just been given
+    this.body.sleep()
+    this.synchronize()
   }
 
   /**

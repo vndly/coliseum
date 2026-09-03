@@ -280,6 +280,48 @@ function readFace(value: unknown): number | null {
 }
 
 /**
+ * Reads a count: a whole number of things, none of which can be negative.
+ *
+ * Every sequence number and every version in the document is one of these.
+ * They are compared rather than indexed with — a throw against the verdict
+ * that judged it, a bowl against the last one applied — and a fraction or a
+ * negative in either is a comparison that can never come out the way the game
+ * needs it to.
+ * @param value - The field as it came out of the document
+ * @returns The count, or null if it is not one
+ */
+function readCount(value: unknown): number | null {
+  const count = readNumber(value)
+
+  if (count === null || !Number.isInteger(count) || count < 0) {
+    return null
+  }
+
+  return count
+}
+
+/**
+ * Reads a position in a list, bounded against the list it points into.
+ *
+ * Bounded here rather than at the reads themselves, because nothing
+ * downstream can tell a seat that is out of range from a seat that has left:
+ * both come back undefined, so no player is the active one, nobody's turn is
+ * their own, and neither a pass nor a takeover can move it on again.
+ * @param value - The field as it came out of the document
+ * @param length - How long the list it points into is
+ * @returns The position, or null if it is not one of that list's
+ */
+function readIndex(value: unknown, length: number): number | null {
+  const index = readCount(value)
+
+  if (index === null || index >= length) {
+    return null
+  }
+
+  return index
+}
+
+/**
  * Reads how many seats the match has.
  *
  * Bounded before it is built, in the same way and for the same reason a hand
@@ -330,11 +372,16 @@ function readDieSnapshot(value: unknown): DieSnapshot | null {
 
 /**
  * Reads a run of identifiers, which is how a verdict names the dice it took.
+ *
+ * Bounded like the bowl it names dice out of, and against the same figure: a
+ * verdict can only ever take dice the match was dealt, and the scene walks
+ * every identifier in it on the frame the verdict arrives.
  * @param value - The field as it came out of the document
+ * @param limit - The most identifiers there could be
  * @returns The identifiers, or null if any of them could not be read
  */
-function readStrings(value: unknown): string[] | null {
-  if (!isArray(value)) {
+function readStrings(value: unknown, limit: number): string[] | null {
+  if (!isArray(value) || value.length > limit) {
     return null
   }
 
@@ -363,10 +410,10 @@ function readResolution(value: unknown): ThrowResolution | null {
     return null
   }
 
-  const seq = readNumber(value.seq)
+  const seq = readCount(value.seq)
   const atRest = readBowl(value.atRest)
-  const removed = readStrings(value.removed)
-  const returned = readStrings(value.returned)
+  const removed = readStrings(value.removed, MATCH_DICE)
+  const returned = readStrings(value.returned, MATCH_DICE)
 
   if (seq === null || atRest === null || removed === null || returned === null) {
     return null
@@ -481,8 +528,18 @@ function readBowl(value: unknown): DieSnapshot[] | null {
   return bowl
 }
 
+/**
+ * Reads the seats.
+ *
+ * Bounded before it is built, in the same way and for the same reason a hand
+ * is: every seat is a row on the rail and a stop on the walk `nextActivePlayer`
+ * makes at every verdict, and this runs on every match the lobby lists. A match
+ * cannot have been made for more seats than the game offers.
+ * @param value - The field as it came out of the document
+ * @returns The seats, or null if any of them could not be read
+ */
 function readPlayers(value: unknown): MatchPlayer[] | null {
-  if (!isArray(value)) {
+  if (!isArray(value) || value.length > MAX_PLAYERS) {
     return null
   }
 
@@ -548,16 +605,24 @@ export function parseMatchState(code: string, value: unknown): MatchState | null
   const phase = readString(value.phase)
   const players = readPlayers(value.players)
   const pools = readPools(value.pools)
-  const turnIndex = readNumber(value.turnIndex)
   const bowl = readBowl(value.bowl)
-  const throwSeq = readNumber(value.throwSeq)
-  const bowlVersion = readNumber(value.bowlVersion)
+  const throwSeq = readCount(value.throwSeq)
+  const bowlVersion = readCount(value.bowlVersion)
 
-  if (playerCount === null || players === null || pools === null || turnIndex === null) {
+  if (playerCount === null || players === null || pools === null) {
     return null
   }
 
   if (bowl === null || throwSeq === null || bowlVersion === null) {
+    return null
+  }
+
+  // Read against the seats rather than on its own, which is why it is read
+  // here and not beside the rest: a seat nobody is sitting in is a match in
+  // which it is nobody's turn, and nothing in the game can move it off one
+  const turnIndex = readIndex(value.turnIndex, players.length)
+
+  if (turnIndex === null) {
     return null
   }
 
@@ -574,6 +639,13 @@ export function parseMatchState(code: string, value: unknown): MatchState | null
   const verdict = written ? readResolution(stored) : null
 
   if (written && verdict === null) {
+    return null
+  }
+
+  // A verdict cannot have judged a throw the match has never heard of. One
+  // that claims to reads as judged to every guard that asks it and as unjudged
+  // to the screen, which is a match where no bowl is ever judged again
+  if (verdict !== null && verdict.seq > throwSeq) {
     return null
   }
 

@@ -297,12 +297,18 @@ export class ThrowController {
       return
     }
 
+    // A release whose ray misses the table plane keeps the aim the preview is
+    // already drawn from rather than throwing the gesture away. The plane is
+    // missed by any ray at or above the horizon, and pointer capture keeps a
+    // drag live past the top of the canvas — so an ordinary drag reaches it.
+    // The move handler holds the last good point for exactly this reason, and
+    // a player looking at a line they aimed has finished aiming.
     if (this.projectToTable(event, this.launchGround)) {
       this.clampToThrowRadius(this.launchGround)
+    }
 
-      if (this.buildLaunch(this.count)) {
-        this.launch(this.describeLaunches(this.count))
-      }
+    if (this.buildLaunch(this.count)) {
+      this.launch(this.describeLaunches(this.count))
     }
 
     this.cancel()

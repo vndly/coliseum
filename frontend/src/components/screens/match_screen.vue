@@ -6,11 +6,19 @@
      calls into the scene directly so that nothing reactive gets anywhere near
      the render loop. -->
 <script setup lang="ts">
-import {computed, onBeforeUnmount, onMounted, ref, shallowRef, useTemplateRef, watch} from 'vue'
+import {computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  shallowRef,
+  useTemplateRef,
+  watch} from 'vue'
 import {onBeforeRouteLeave, useRoute, useRouter} from 'vue-router'
 import DieFace from '@/components/die_face.vue'
 import {nextBotMove} from '@/match/bots'
 import type {BotMove} from '@/match/bots'
+import {isMatchCode, normaliseMatchCode} from '@/match/codes'
 import {MatchClient} from '@/match/match_client'
 import type {MatchPlayer, MatchState, ThrowRecord} from '@/match/match_state'
 import {drawFromHand, nextActivePlayer, poolSize, throwSize} from '@/match/rules'
@@ -23,9 +31,16 @@ const route = useRoute()
 const router = useRouter()
 
 const parameter = route.params.code
-const code = (typeof parameter === 'string' ? parameter : '').toUpperCase()
+
+// Put through the same normalisation the lobby applies before it joins one.
+// This address is the one meant to be shared, and it was the single entry
+// point that handed whatever it was given straight to the store as a
+// document's name — where a code carrying a slash is answered with the store's
+// account of its own path rather than with the game's account of the code.
+const code = normaliseMatchCode(typeof parameter === 'string' ? parameter : '')
 
 const canvas = useTemplateRef<HTMLCanvasElement>('canvas')
+const notice = useTemplateRef<HTMLElement>('notice')
 
 const COPIED_MILLISECONDS = 2000 // How long the copy button holds its answer
 
@@ -37,6 +52,23 @@ const COPIED_MILLISECONDS = 2000 // How long the copy button holds its answer
  * two. Long enough that an ordinary round trip is never mistaken for one.
  */
 const TAKEOVER_MILLISECONDS = 5000
+
+/**
+ * How long between one offer to judge a settled bowl and the next.
+ *
+ * The first offer is the next player's alone, so that five tables do not all
+ * reach for one bowl. Every offer after it is open to anybody who ran the
+ * throw through their own scene, because the seat that was asked first can be
+ * the seat that has gone — and a bowl nobody judges is a match where nobody
+ * can throw, pass or be paid what their throw won them again.
+ */
+const TAKEOVER_RETRY_MILLISECONDS = 5000
+
+/** How many times a bowl is offered around before it is left alone. */
+const TAKEOVER_ATTEMPTS = 6
+
+/** What the claim on a match's bot seats is named, with the code after it. */
+const BOT_LOCK = 'coliseum-bots-'
 
 /** How long a turn is called for before the call fades and the table is let go. */
 const TURN_CALL_MILLISECONDS = 1000
@@ -62,16 +94,19 @@ let pendingThrower = '' // The seat that throw was made from, which is a bot's o
 let pendingThrow: Promise<void> = Promise.resolve() // That throw's own write, still in flight
 let awaitingSeq = 0 // Somebody else's throw that has stopped and not yet been judged
 let takeoverTimer = 0 // The pending offer to judge it for them, so it can be called off
-let appliedBowlVersion = -1 // The last bowl handed to the scene; -1 so the opening one lands
+let takeoverAttempt = 0 // How many offers this bowl has already had
+let appliedBowlVersion: number | null = null // The last bowl handed to the scene, once one has been
 let copiedTimer = 0 // The pending reset of the copy button, so it can be called off
 let turnCallTimer = 0 // The pending end of the turn call, so it can be called off
 let botTimer = 0 // The pending move of the bot whose turn it is, so it can be called off
 let leaveAllowed = false // Set by every departure made here, so the guard lets those through
 let unmounted = false // Whether the screen has gone, for the connection still being opened
+let releaseBotSeats: (() => void) | null = null // Gives up the claim on the bot seats
 
 const state = shallowRef<MatchState | null>(null)
 const uid = ref('')
 const busy = ref(false) // A throw made here is still in the air
+const writing = ref(false) // And its write has not reached the match yet
 const simulating = ref(false) // Whether the scene has a physics world to throw into
 const resolving = ref(false) // A verdict is being played out, here and on every other table
 const calledTurn = ref(-1) // The seat the call names, once a turn has been called
@@ -79,6 +114,8 @@ const calling = ref(false) // Whether that call is up, and the table held for it
 const acknowledgedLoss = ref(false) // Whether this player has closed the notice that they are out
 const acknowledgedEnd = ref(false) // Whether this player has closed the notice naming the winner
 const showLeave = ref(false) // Whether the question about leaving the match is up
+const unreadable = ref(false) // Whether the match itself can no longer be read
+const botDriver = ref(false) // Whether this view is the one playing the seats nobody is behind
 const copyResult = ref<'none' | 'done' | 'failed'>('none') // What the last press of copy came to
 const error = ref('')
 
@@ -183,6 +220,7 @@ const canThrow = computed<boolean>(
     && simulating.value
     && isMyTurn.value
     && !busy.value
+    && !writing.value
     && !resolving.value
     && !calling.value
     && judged.value
@@ -216,7 +254,19 @@ const botMove = computed<BotMove | null>(() => {
     return null
   }
 
-  if (!simulating.value || busy.value || resolving.value || calling.value || !judged.value) {
+  if (!simulating.value || busy.value || writing.value || resolving.value || calling.value) {
+    return null
+  }
+
+  if (!judged.value) {
+    return null
+  }
+
+  // And held off entirely unless this view is the one playing the bot seats.
+  // A browser's tabs share the identity a seat was taken under, so the same
+  // match opened twice is the same seated player twice — and both views would
+  // otherwise draw their own pause and move for every bot at the table.
+  if (!botDriver.value) {
     return null
   }
 
@@ -271,6 +321,26 @@ const showEnd = computed<boolean>(
   () => !showLeave.value && finished.value && !acknowledgedEnd.value && !resolving.value,
 )
 
+/**
+ * Whether a card standing over the table is waiting to be answered.
+ *
+ * The layer behind one keeps its place in the tab order otherwise. A scrim
+ * takes the pointer and has nothing to say to the keyboard, so Tab and Enter
+ * reached straight past the question about leaving to the Pass button behind
+ * it — ending a turn in answer to a question about something else.
+ */
+const noticeShowing = computed<boolean>(
+  () => showLeave.value || showLoss.value || showEnd.value || unreadable.value,
+)
+
+/**
+ * The same answer as an attribute. Nothing at all rather than false, because
+ * inert is not one of the attributes Vue knows to take off an element on a
+ * false — written out as the string "false" it is every bit as inert as it is
+ * written out as anything else.
+ */
+const behindNotice = computed<true | undefined>(() => noticeShowing.value || undefined)
+
 const winnerLine = computed<string>(() => {
   const match = state.value
 
@@ -297,7 +367,7 @@ const winnerLine = computed<string>(() => {
  * answers that window alone; from the first read on, the phase decides.
  */
 const showWaiting = computed<boolean>(
-  () => inLobby.value && (state.value !== null || route.query.bots !== '1'),
+  () => !unreadable.value && inLobby.value && (state.value !== null || route.query.bots !== '1'),
 )
 
 const seatsTaken = computed<number>(() => state.value?.players.length ?? 0)
@@ -367,6 +437,18 @@ watch(botTurnKey, (key) => {
   botTimer = window.setTimeout(runBotTurn, pause)
 })
 
+// Focus is moved into a card as it opens, so that the keyboard is inside the
+// question being asked rather than left on the layer just shut behind it
+watch(noticeShowing, (showing) => {
+  if (!showing) {
+    return
+  }
+
+  void nextTick(() => {
+    notice.value?.querySelector('button')?.focus()
+  })
+})
+
 function describe(reason: unknown): string {
   return reason instanceof Error ? reason.message : 'Something went wrong. Try again.'
 }
@@ -404,6 +486,33 @@ function onCopy(): void {
 }
 
 /**
+ * Answers a match that can no longer be read at all: no document at that code,
+ * a document this game cannot make a match out of, or a listener the store has
+ * torn down under it.
+ *
+ * The match is put down rather than left standing. Held on to, the last state
+ * that did read keeps the rail, the turn and the throw controls live over a
+ * match that is not there — and the player only finds out when the write their
+ * gesture made is refused.
+ * @param reason - Why it cannot be read
+ */
+function onLost(reason: unknown): void {
+  unreadable.value = true
+  state.value = null
+  error.value = describe(reason)
+}
+
+/**
+ * Answers the throws beneath the match going quiet. The match itself still
+ * reads, and every bowl still arrives through it — what is lost is watching
+ * somebody else's dice fly rather than finding them already landed.
+ * @param reason - Why they stopped arriving
+ */
+function onSnag(reason: unknown): void {
+  error.value = describe(reason)
+}
+
+/**
  * Takes the match as it now stands.
  * @param next - The match, freshly read
  * @param confirmed - Whether the server answered for this read, rather than the local cache
@@ -430,7 +539,21 @@ function onState(next: MatchState, confirmed: boolean): void {
     return
   }
 
+  // The match reads again, so whatever could not be read before is over and
+  // the line that said so goes with it
+  if (unreadable.value) {
+    unreadable.value = false
+    error.value = ''
+  }
+
   state.value = next
+
+  // The throw made here has reached the match, which is what the controls were
+  // waiting on rather than the write's own answer: it is this reading of the
+  // match that everything below decides against.
+  if (next.throwSeq >= pendingSeq) {
+    writing.value = false
+  }
 
   // Only when the bowl has actually been rewritten. Between a throw being
   // announced and its result being written, the match still holds the bowl
@@ -440,7 +563,7 @@ function onState(next: MatchState, confirmed: boolean): void {
     return
   }
 
-  const arriving = appliedBowlVersion === -1
+  const arriving = appliedBowlVersion === null
 
   appliedBowlVersion = next.bowlVersion
 
@@ -518,6 +641,15 @@ function onLaunch(launches: ThrowLaunch[]): void {
   pendingSeq = seq
   pendingThrower = player.uid
   busy.value = true
+
+  // Held until the match itself says the throw is in it. The dice stopping is
+  // not that moment: the write is a transaction, so nothing of it reaches this
+  // browser's own reading of the match until the server has answered, and a
+  // bowl that settles before then would leave the controls open over a match
+  // still holding the count from before — where the next gesture takes the
+  // same number, and so the very same names for its dice.
+  writing.value = true
+
   scene?.applyThrow(dice)
 
   const submitted = connected.submitThrow(seq, dice, player.uid, drawn.kept)
@@ -532,6 +664,7 @@ function onLaunch(launches: ThrowLaunch[]): void {
     // again, so the retry gives them the very same identifiers.
     scene?.withdrawThrow(dice)
     busy.value = false
+    writing.value = false
     error.value = describe(reason)
   })
 }
@@ -573,17 +706,35 @@ function onSettled(): void {
   }
 
   awaitingSeq = match.throwSeq
+  takeoverAttempt = 0
 
+  armTakeover(TAKEOVER_MILLISECONDS)
+}
+
+/**
+ * Puts the next offer to judge the settled bowl on the clock.
+ * @param delay - How long to wait before making it
+ */
+function armTakeover(delay: number): void {
   window.clearTimeout(takeoverTimer)
-  takeoverTimer = window.setTimeout(runTakeover, TAKEOVER_MILLISECONDS)
+  takeoverTimer = window.setTimeout(runTakeover, delay)
 }
 
 /**
  * Judges a bowl the player who threw it never got around to judging.
  *
- * Only the player who would throw next offers, so that five tables do not all
+ * The first offer is the next player's alone, so that five tables do not all
  * reach for the same bowl at once — and the write refuses itself anyway if the
- * thrower turns out to have managed it after all.
+ * thrower turns out to have managed it after all. Every offer after that is
+ * open to anybody whose own scene ran the throw, because the seat asked first
+ * can be a seat that has gone, or a client that reloaded through the throw and
+ * so has no bowl of its own to publish. Offered again rather than once,
+ * because a bowl nobody judges is a match in which nobody can throw or pass
+ * ever again, and the thrower's hand stays charged for dice it never got back.
+ *
+ * Every way out of this that is not "the bowl has been judged" puts the next
+ * offer on the clock, up to a fixed number of them: a write that is refused, a
+ * scene not in a state to publish, and a seat that is not the one being asked.
  */
 function runTakeover(): void {
   const match = state.value
@@ -593,26 +744,49 @@ function runTakeover(): void {
     return
   }
 
-  // Nothing here is worth publishing. A scene whose physics never started
+  if (match.verdict !== null && match.verdict.seq >= awaitingSeq) {
+    return
+  }
+
+  const attempt = takeoverAttempt
+
+  takeoverAttempt++
+
+  if (attempt >= TAKEOVER_ATTEMPTS) {
+    return
+  }
+
+  // Nothing here is worth publishing yet. A scene whose physics never started
   // reports an empty bowl rather than no bowl, and a scene part way through a
   // verdict is holding the previous throw's dice — either would be written over
   // the match as though it were what the thrower saw.
   if (scene === null || !scene.isSimulating || resolving.value) {
-    return
-  }
+    armTakeover(TAKEOVER_RETRY_MILLISECONDS)
 
-  if (match.verdict !== null && match.verdict.seq >= awaitingSeq) {
     return
   }
 
   const seat = match.players.findIndex((player) => player.uid === uid.value)
 
-  if (seat === -1 || nextActivePlayer(match.players, match.pools, match.turnIndex) !== seat) {
+  // Not at this table at all, and on the way back to the lobby
+  if (seat === -1) {
     return
   }
 
+  if (attempt === 0 && nextActivePlayer(match.players, match.pools, match.turnIndex) !== seat) {
+    armTakeover(TAKEOVER_RETRY_MILLISECONDS)
+
+    return
+  }
+
+  // Armed before the write rather than after it, so that a write which never
+  // answers is answered by the next offer rather than by nothing. The verdict
+  // landing clears it on its way through the bowl, and a second attempt over a
+  // throw already judged is refused inside the transaction.
+  armTakeover(TAKEOVER_RETRY_MILLISECONDS)
+
   // Nobody here threw this one, so the turn is handed on for whoever did
-  connected.submitVerdict(awaitingSeq, scene?.bowlSnapshot ?? [], null).catch((reason: unknown) => {
+  connected.submitVerdict(awaitingSeq, scene.bowlSnapshot, null).catch((reason: unknown) => {
     error.value = describe(reason)
   })
 }
@@ -772,6 +946,15 @@ function isOut(player: MatchPlayer): boolean {
  * match the player has since walked into.
  */
 async function connect(): Promise<void> {
+  // Asked here for the same reason the lobby asks it of a typed code: this is
+  // a document's own name, and a code that is not one is a question about the
+  // store's own paths rather than about the match the player was sent to
+  if (!isMatchCode(code)) {
+    onLost(new Error('No match with that code.'))
+
+    return
+  }
+
   try {
     const opened = await MatchClient.open(code)
 
@@ -783,10 +966,47 @@ async function connect(): Promise<void> {
 
     uid.value = opened.uid
     client = opened
-    opened.listen(onState, onThrow)
+    opened.listen(onState, onThrow, onLost, onSnag)
   } catch (reason: unknown) {
     error.value = describe(reason)
   }
+}
+
+/**
+ * Claims the right to play this match's bot seats, for this view of it alone.
+ *
+ * A bot's turns are played by the browser that started the match, and a
+ * browser is not the same thing as a view of it: anonymous sign-in is shared
+ * across an origin, so the same match opened in two tabs is the same seated
+ * player twice and both would move for every bot. The lock reaches exactly as
+ * far as the identity the seat was taken under does, and is held for as long
+ * as this screen is.
+ */
+function claimBotSeats(): void {
+  // A browser with no lock manager plays them as it always has. One view is
+  // the ordinary case, and the race this closes needs a second one.
+  if (typeof navigator.locks === 'undefined') {
+    botDriver.value = true
+
+    return
+  }
+
+  navigator.locks.request(`${BOT_LOCK}${code}`, async () => {
+    if (unmounted) {
+      return
+    }
+
+    botDriver.value = true
+
+    await new Promise<void>((resolve) => {
+      releaseBotSeats = resolve
+    })
+  }).catch(() => {
+    // The claim could not be made at all, which is not a reason for a match
+    // against bots to sit still: this view plays them, as it did before there
+    // was anything to claim.
+    botDriver.value = true
+  })
 }
 
 /**
@@ -799,7 +1019,9 @@ async function connect(): Promise<void> {
  * @returns Whether the navigation may go ahead
  */
 onBeforeRouteLeave((): boolean => {
-  if (leaveAllowed || finished.value) {
+  // A match that cannot be read is not one there is anything to walk out of,
+  // so the question is not asked over it
+  if (leaveAllowed || finished.value || unreadable.value) {
     return true
   }
 
@@ -835,6 +1057,8 @@ onMounted(() => {
   // Deliberately not awaited. The bowl paints on the first frame either way,
   // and the match arriving a moment later simply fills it.
   void connect()
+
+  claimBotSeats()
 })
 
 onBeforeUnmount(() => {
@@ -844,6 +1068,9 @@ onBeforeUnmount(() => {
   window.clearTimeout(takeoverTimer)
   window.clearTimeout(turnCallTimer)
   window.clearTimeout(botTimer)
+  releaseBotSeats?.()
+  releaseBotSeats = null
+  botDriver.value = false
   client?.dispose()
   client = null
   scene?.dispose()
@@ -867,7 +1094,7 @@ onBeforeUnmount(() => {
          Hidden rather than dropped while the question about leaving is up: it
          is the wait that decides which chrome exists, and the two scrims over
          one another only muddy the card that is being answered. -->
-    <div v-if="showWaiting" v-show="!showLeave" class="waiting">
+    <div v-if="showWaiting" v-show="!showLeave" :inert="behindNotice" class="waiting">
       <div class="waiting__card">
         <p class="label">Match code</p>
 
@@ -908,7 +1135,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div v-else class="chrome">
+    <div v-else-if="!unreadable" :inert="behindNotice" class="chrome">
       <header class="chrome__top">
         <ul class="rail">
           <li
@@ -990,11 +1217,43 @@ onBeforeUnmount(() => {
       </div>
     </Transition>
 
-    <!-- Both notices leave the bowl visible behind them. One says to keep
-         watching and the other is shown over the bowl everybody wants to see,
-         so neither can be the blackout the lobby uses. -->
-    <div v-if="showLoss" class="notice">
-      <div class="notice__card" role="dialog" aria-labelledby="loss-heading">
+    <!-- Every card that has to be answered, on one layer. Only ever one of
+         them: the question about leaving puts both the others away, and a
+         player cannot be out of a match that is over. One layer is what lets
+         the two beneath it be shut behind whichever card is up, and what gives
+         the focus one place to go when a card opens.
+
+         All three leave the bowl visible. One says to keep watching and one is
+         over the bowl everybody wants to see, so none can be the blackout the
+         lobby uses. -->
+    <div v-if="noticeShowing" ref="notice" class="notice">
+      <div
+        v-if="showLeave"
+        class="notice__card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="leave-heading"
+      >
+        <p id="leave-heading" class="label">Leave the match</p>
+
+        <div class="notice__answers notice__answers--spaced">
+          <button type="button" class="action" @click="onCancelLeave">
+            Stay
+          </button>
+
+          <button type="button" class="action action--quiet" @click="onLeave">
+            Leave
+          </button>
+        </div>
+      </div>
+
+      <div
+        v-else-if="showLoss"
+        class="notice__card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="loss-heading"
+      >
         <p id="loss-heading" class="label">Out of the match</p>
         <p class="notice__line">You have no dice left. Stay and see who takes it.</p>
 
@@ -1002,10 +1261,14 @@ onBeforeUnmount(() => {
           Keep watching
         </button>
       </div>
-    </div>
 
-    <div v-if="showEnd" class="notice">
-      <div class="notice__card" role="dialog" aria-labelledby="winner-heading">
+      <div
+        v-else-if="showEnd"
+        class="notice__card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="winner-heading"
+      >
         <p class="label">Match over</p>
         <p id="winner-heading" class="notice__winner">{{ winnerLine }}</p>
 
@@ -1021,25 +1284,27 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-    </div>
 
-    <div v-if="showLeave" class="notice">
-      <div class="notice__card" role="dialog" aria-labelledby="leave-heading">
-        <p id="leave-heading" class="label">Leave the match</p>
+      <!-- Nothing else on the screen leads anywhere once the match cannot be
+           read: the chrome is gone with the match it was drawn from, so the way
+           back to the lobby is offered here or nowhere -->
+      <div
+        v-else
+        class="notice__card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="unreadable-heading"
+      >
+        <p id="unreadable-heading" class="label">No such match</p>
+        <p class="notice__line">{{ error === '' ? 'This match could not be read.' : error }}</p>
 
-        <div class="notice__answers notice__answers--spaced">
-          <button type="button" class="action" @click="onCancelLeave">
-            Stay
-          </button>
-
-          <button type="button" class="action action--quiet" @click="onLeave">
-            Leave
-          </button>
-        </div>
+        <button type="button" class="action" @click="onLeave">
+          Back to lobby
+        </button>
       </div>
     </div>
 
-    <p v-if="error" class="error" role="alert">{{ error }}</p>
+    <p v-if="error && !unreadable" class="error" role="alert">{{ error }}</p>
   </main>
 </template>
 

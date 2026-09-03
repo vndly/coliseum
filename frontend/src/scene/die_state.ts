@@ -1,4 +1,4 @@
-import {Quaternion, Vector3} from 'three'
+import {Matrix4, Quaternion, Vector3} from 'three'
 import {BONE_SKIN} from '@/scene/die_skins'
 import {BOWL_INTERIOR_FLOOR_HEIGHT,
   BOWL_INTERIOR_FLOOR_RADIUS,
@@ -130,6 +130,73 @@ export function readDieFace(rotation: [number, number, number, number]): number 
   }
 
   return value
+}
+
+/** The three directions a die's own axes lie along when it is resting square. */
+const AXES: Vector3[] = [
+  new Vector3(1, 0, 0),
+  new Vector3(0, 1, 0),
+  new Vector3(0, 0, 1),
+]
+
+/**
+ * The nearest of the six directions one axis of a resting die can point in.
+ * @param direction - Where that axis is pointing now
+ * @param taken - The direction another of the die's axes has already been given, or null for the first
+ * @returns The direction it is to be given, as a fresh vector
+ */
+function nearestAxis(direction: Vector3, taken: Vector3 | null): Vector3 {
+  let nearest = UP.clone()
+  let closest = Number.NEGATIVE_INFINITY
+
+  for (const axis of AXES) {
+    // The axis another of the die's own is already lying along. Two axes down
+    // one line is not an attitude, so it is passed over rather than compared.
+    if (taken !== null && Math.abs(taken.dot(axis)) > 0.5) {
+      continue
+    }
+
+    const alignment = direction.dot(axis)
+
+    if (Math.abs(alignment) > closest) {
+      closest = Math.abs(alignment)
+      nearest = alignment < 0 ? axis.clone().negate() : axis.clone()
+    }
+  }
+
+  return nearest
+}
+
+/**
+ * The attitude a die is nearest to being able to rest in.
+ *
+ * A die at rest is square to the axes, with one face straight up — one of
+ * twenty-four attitudes, and nothing between them. This finds the nearest of
+ * them by giving each of the die's own axes the direction it is closest to
+ * lying along, and is what a bowl that never settled is snapped onto before it
+ * is read: the value published is then the value on the die rather than
+ * whichever face happened to be uppermost mid-tumble, and it is the value
+ * every other player sees, since they set their own dice from this.
+ * @param rotation - The attitude the die is in
+ * @returns The nearest attitude it could be resting in
+ */
+export function restingRotation(rotation: Quaternion): Quaternion {
+  // Turned around, so that the columns read as the die's own directions for
+  // straight up and straight ahead rather than the other way about. Which of
+  // the die's axes is nearest to straight up is the face it is showing, and
+  // asking that question first is what keeps this from changing the value: the
+  // die is put down on the face it was already on.
+  const inverse = new Matrix4().makeRotationFromQuaternion(rotation).transpose()
+
+  // The third is crossed rather than snapped, so what comes out is a rotation
+  // and not a basis that happens to be left handed
+  const up = nearestAxis(new Vector3().setFromMatrixColumn(inverse, 1), null)
+  const right = nearestAxis(new Vector3().setFromMatrixColumn(inverse, 0), up)
+  const forward = new Vector3().crossVectors(right, up)
+
+  return new Quaternion()
+    .setFromRotationMatrix(inverse.makeBasis(right, up, forward))
+    .invert()
 }
 
 /**

@@ -6,8 +6,7 @@ import {collection,
   query,
   runTransaction,
   serverTimestamp,
-  updateDoc,
-  writeBatch} from 'firebase/firestore'
+  updateDoc} from 'firebase/firestore'
 import type {DocumentReference, Unsubscribe} from 'firebase/firestore'
 import {createMatchCode} from '@/match/codes'
 import {currentPlayerId, firestore} from '@/match/firebase'
@@ -178,8 +177,43 @@ export class MatchClient {
         throw new Error('No match with that code.')
       }
 
-      // Already seated. A reload, or a retry after a write that did land.
-      if (state.players.some((player) => player.uid === playerId)) {
+      // Already seated. A reload, a retry after a write that did land, or the
+      // player pressing the row for their own match again.
+      const seated = state.players.findIndex((player) => player.uid === playerId)
+
+      if (seated !== -1) {
+        const player = state.players[seated]
+
+        // A seat is settled the moment the match starts, so a name or colour
+        // changed after that is not something the table can be told. Before it,
+        // it is: the lobby has already kept the new one, and a field saying one
+        // thing while the match says another survives a reload.
+        if (player === undefined || state.phase !== 'lobby') {
+          return
+        }
+
+        if (player.name === name && player.color === color) {
+          return
+        }
+
+        const revised = [...state.players]
+
+        revised[seated] = {
+          ...player,
+          name: name,
+          color: color,
+        }
+
+        transaction.update(reference, {
+          players: revised,
+
+          // Dealt again in the new colour. The paint travels with the die, so a
+          // hand dealt before the change would go on being thrown in the colour
+          // its player has just left behind — and nothing has been thrown out
+          // of it yet, because the match has not started.
+          [`pools.${playerId}`]: startingHand(color),
+        })
+
         return
       }
 
@@ -238,20 +272,51 @@ export class MatchClient {
    * that has not caught up with a transaction this player just committed still
    * describes the match as it was beforehand. Anything that would throw a
    * player out on what it reads has to wait for the server to agree.
+   * A read that cannot be turned into a match is answered rather than dropped.
+   * There are three of them and they are not the same thing: no document at
+   * that code, a document this game cannot read, and a listener the store has
+   * torn down. All three used to leave the screen on "Connecting to the match"
+   * for good, or — worse, mid-match — leave it showing the last match it could
+   * read as though it were still there.
+   *
+   * Answered only once the server has spoken, like everything else here that
+   * would throw a player out on what it read. A fresh listener is served from a
+   * cache that may never have held this match, and an absence there is not an
+   * absence in the match.
    * @param onState - Given the match every time it changes, and whether the server confirmed it
    * @param onThrow - Given another player's throw, once, as it is made
+   * @param onLost - Given why the match itself can no longer be read
+   * @param onSnag - Given why the throws beneath it stopped arriving, which the match survives
    */
   listen(
     onState: (state: MatchState, confirmed: boolean) => void,
     onThrow: (record: ThrowRecord) => void,
+    onLost: (reason: unknown) => void,
+    onSnag: (reason: unknown) => void,
   ): void {
     this.unsubscribers.push(onSnapshot(this.reference, (snapshot) => {
+      const confirmed = !snapshot.metadata.fromCache
+
+      if (!snapshot.exists()) {
+        if (confirmed) {
+          onLost(new Error('No match with that code.'))
+        }
+
+        return
+      }
+
       const state = parseMatchState(this.code, snapshot.data())
 
-      if (state !== null) {
-        onState(state, !snapshot.metadata.fromCache)
+      if (state === null) {
+        if (confirmed) {
+          onLost(new Error('This match could not be read.'))
+        }
+
+        return
       }
-    }))
+
+      onState(state, confirmed)
+    }, onLost))
 
     // Only ever the newest throw. The ones before it are history, and their
     // outcome is already in the bowl this player was handed on arrival.
@@ -290,7 +355,7 @@ export class MatchClient {
       if (!snapshot.metadata.fromCache) {
         this.primed = true
       }
-    }))
+    }, onSnag))
   }
 
   /**
@@ -312,10 +377,15 @@ export class MatchClient {
    * what every other player reads it as.
    * The hand is written out rather than decremented. A count could be charged
    * blind with an increment, and this cannot: which dice left is which colours
-   * left, and only the browser making the throw knows that. It is safe to
-   * write rather than read first — a hand is only ever spent by the player
-   * whose turn it is, and the verdict that pays it back rewrites every hand
-   * from a state read inside its own transaction.
+   * left, and only the browser making the throw knows that.
+   *
+   * A transaction rather than a batch, so that the number the throw is named
+   * after is claimed rather than assumed. Anonymous sign-in is shared across a
+   * browser's tabs, so two views of one match are the same seated player twice,
+   * and both reach for the same number off the same cached match. Written
+   * blind, the second overwrote the first: the table then animated one throw
+   * while the bowl it was judged against came from the other. Refused instead,
+   * and the screen takes its own dice back off the table and says so.
    * @param seq - This throw's number, which every die of it is named after
    * @param dice - Every die of the throw, as this player described them
    * @param thrower - The seat the throw is made from, this player's own or a bot's
@@ -338,29 +408,44 @@ export class MatchClient {
 
     this.appliedThrow = Math.max(this.appliedThrow, seq)
 
-    const batch = writeBatch(firestore)
-
-    batch.set(doc(this.reference, THROWS, String(seq)), {
-      seq: seq,
-      uid: thrower,
-      dice: dice.map((die) => ({
-        id: die.id,
-        skin: die.skin,
-        origin: die.launch.origin,
-        velocity: die.launch.velocity,
-        orientation: die.launch.orientation,
-        angularVelocity: die.launch.angularVelocity,
-      })),
-    })
-
-    batch.update(this.reference, {
-      throwSeq: seq,
-      hasThrown: true,
-      [`pools.${thrower}`]: kept,
-    })
+    const record = doc(this.reference, THROWS, String(seq))
 
     try {
-      await batch.commit()
+      await runTransaction(firestore, async (transaction) => {
+        const snapshot = await transaction.get(this.reference)
+        const state = parseMatchState(this.code, snapshot.data())
+
+        if (state === null) {
+          throw new Error('No match with that code.')
+        }
+
+        // The number is spent, so somebody has already thrown under it — the
+        // other view of this match, a beat ahead. Asked of the match's own
+        // count rather than of the record: the two are written together and
+        // nothing else moves the count, so the count answers for both.
+        if (state.throwSeq + 1 !== seq) {
+          throw new Error('That throw has already been made.')
+        }
+
+        transaction.set(record, {
+          seq: seq,
+          uid: thrower,
+          dice: dice.map((die) => ({
+            id: die.id,
+            skin: die.skin,
+            origin: die.launch.origin,
+            velocity: die.launch.velocity,
+            orientation: die.launch.orientation,
+            angularVelocity: die.launch.angularVelocity,
+          })),
+        })
+
+        transaction.update(this.reference, {
+          throwSeq: seq,
+          hasThrown: true,
+          [`pools.${thrower}`]: kept,
+        })
+      })
     } catch (reason: unknown) {
       // The throw never landed, so the number it was given is free again and
       // the next player to reach for one takes it. The mark goes back with it:
