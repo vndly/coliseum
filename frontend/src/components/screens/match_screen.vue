@@ -15,13 +15,14 @@ import {computed,
   useTemplateRef,
   watch} from 'vue'
 import {onBeforeRouteLeave, useRoute, useRouter} from 'vue-router'
+import {MatchAudio} from '@/audio/match_audio'
 import DieFace from '@/components/die_face.vue'
 import {nextBotMove} from '@/match/bots'
 import type {BotMove} from '@/match/bots'
 import {isMatchCode, normaliseMatchCode} from '@/match/codes'
 import {MatchClient} from '@/match/match_client'
 import type {MatchPlayer, MatchState, ThrowRecord} from '@/match/match_state'
-import {drawFromHand, nextActivePlayer, poolSize, throwSize} from '@/match/rules'
+import {drawFromHand, nextActivePlayer, poolSize, returnedDiceKind, throwSize} from '@/match/rules'
 import {dieSkin, dieSkinCss} from '@/scene/die_skins'
 import type {ThrowLaunch} from '@/scene/die_state'
 import {DIE_LIMIT} from '@/scene/dimensions'
@@ -88,6 +89,7 @@ const BOT_PAUSE_MAXIMUM = 1400
 // reactivity, and the client and the counters are only ever read from callbacks
 // that already know when they changed
 let scene: DishScene | null = null
+let matchAudio: MatchAudio | null = null
 let client: MatchClient | null = null
 let pendingSeq = 0 // The throw made here that is waiting to come to rest
 let pendingThrower = '' // The seat that throw was made from, which is a bot's on a bot's turn
@@ -104,6 +106,8 @@ let unmounted = false // Whether the screen has gone, for the connection still b
 let releaseBotSeats: (() => void) | null = null // Gives up the claim on the bot seats
 let screenWakeLock: WakeLockSentinel | null = null // What is keeping the device awake, once it is
 let askingScreenAwake = false // Whether a request for that lock is already in the air
+let lossSoundPlayed = false // A player can see both defeat notices, but only hears the first
+let endSoundPlayed = false // A leave question can hide and reveal the match-over card
 
 const state = shallowRef<MatchState | null>(null)
 const uid = ref('')
@@ -449,6 +453,44 @@ watch(noticeShowing, (showing) => {
   void nextTick(() => {
     notice.value?.querySelector('button')?.focus()
   })
+})
+
+// Music belongs to play rather than to the waiting room, and is left running
+// through the final card so that the end of the match does not turn silent.
+watch(playing, (started) => {
+  if (started) {
+    matchAudio?.startMusic()
+  }
+})
+
+// In a match with more than two seats, defeat can be known before the match is
+// over. That first notice owns the sound; the final card must not play it again.
+watch(showLoss, (showing) => {
+  if (!showing || lossSoundPlayed || matchAudio === null) {
+    return
+  }
+
+  matchAudio.playLost()
+  lossSoundPlayed = true
+})
+
+// A leave question can stand over the final card and uncover it again. The
+// card still belongs to one match ending, so its sound is guarded separately.
+watch(showEnd, (showing) => {
+  const match = state.value
+
+  if (!showing || endSoundPlayed || match === null || matchAudio === null) {
+    return
+  }
+
+  if (match.winner === uid.value) {
+    matchAudio.playWin()
+  } else if (!lossSoundPlayed) {
+    matchAudio.playLost()
+    lossSoundPlayed = true
+  }
+
+  endSoundPlayed = true
 })
 
 function describe(reason: unknown): string {
@@ -1114,9 +1156,32 @@ onMounted(() => {
     return
   }
 
+  matchAudio = new MatchAudio()
   scene = new DishScene(element)
   scene.onLaunch = onLaunch
   scene.onSettled = onSettled
+  scene.onRollImpact = (impact) => {
+    if (impact === 'single') {
+      matchAudio?.playRollSingle()
+    } else {
+      matchAudio?.playRollMultiple()
+    }
+  }
+  scene.onVerdictBeat = (beat, resolution) => {
+    if (beat === 'fail') {
+      matchAudio?.playFail()
+
+      return
+    }
+
+    const kind = returnedDiceKind(resolution)
+
+    if (kind === 'flush') {
+      matchAudio?.playFlush()
+    } else if (kind === 'pair') {
+      matchAudio?.playPair()
+    }
+  }
   scene.onResolved = () => {
     resolving.value = false
   }
@@ -1155,6 +1220,8 @@ onBeforeUnmount(() => {
   client = null
   scene?.dispose()
   scene = null
+  matchAudio?.dispose()
+  matchAudio = null
 
   // Last, behind the connection and the scene. Nothing above it needs the
   // screen awake, and everything above it matters more than whether this

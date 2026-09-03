@@ -311,6 +311,30 @@ export function resolveThrow(
 }
 
 /**
+ * What made the dice named as returned go back to the thrower's hand.
+ *
+ * A verdict stores a flush and a group in the same `returned` field because
+ * both have the same effect. Their faces still distinguish them for the
+ * presentation that accompanies that return: a flush is exactly one through
+ * five, while even five grouped dice contain a repeated face.
+ * @param resolution - The verdict whose returned dice are being shown
+ * @returns Their reason for returning, or null when none returned
+ */
+export function returnedDiceKind(resolution: ThrowResolution): 'pair' | 'flush' | null {
+  if (resolution.returned.length === 0) {
+    return null
+  }
+
+  const identifiers = new Set(resolution.returned)
+  const returned = resolution.atRest.filter((die) => identifiers.has(die.id))
+  const isFlush = identifiers.size === resolution.returned.length
+    && returned.length === resolution.returned.length
+    && flushDice(returned).length > 0
+
+  return isFlush ? 'flush' : 'pair'
+}
+
+/**
  * The whole bowl, when it is holding one of every value a die keeps.
  *
  * Nothing else in it and nothing missing from it: five dice reading one, two,

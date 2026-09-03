@@ -6,6 +6,7 @@ import {Group,
   Vector2,
   Vector3} from 'three'
 import type {BufferGeometry, Object3D} from 'three'
+import type {ColliderHandle} from '@dimforge/rapier3d-compat'
 import {RoundedBoxGeometry} from 'three/addons/geometries/RoundedBoxGeometry.js'
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js'
 import {Die} from '@/scene/die'
@@ -184,18 +185,26 @@ export class Dice {
    * @param identifier - The name both players know this die by
    * @param skin - The colour it is painted in, which came with the throw
    * @param launch - The throw, exactly as the thrower described it
+   * @returns The created die's collider, or null when the throw was refused
    */
-  throw(physics: PhysicsWorld, identifier: string, skin: number, launch: ThrowLaunch): void {
+  throw(
+    physics: PhysicsWorld,
+    identifier: string,
+    skin: number,
+    launch: ThrowLaunch,
+  ): ColliderHandle | null {
     const world = physics.world
 
     if (world === null || this.dice.length >= DIE_LIMIT || this.holds(identifier)) {
-      return
+      return null
     }
 
     const die = Die.thrown(world, this.buildMeshes(skin), identifier, skin, launch)
 
     this.group.add(die.object)
     this.dice.push(die)
+
+    return die.colliderHandle
   }
 
   /**

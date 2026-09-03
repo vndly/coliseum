@@ -21,6 +21,8 @@ import {BOWL_FRICTION,
   PHYSICS_TIMESTEP,
   TABLE_SIZE} from '@/scene/dimensions'
 
+export type RollImpact = 'single' | 'multiple'
+
 /**
  * The rigid-body world the dice are thrown into.
  *
@@ -50,9 +52,16 @@ import {BOWL_FRICTION,
  */
 export class PhysicsWorld {
   private simulation: World | null = null // Null until the WASM module has loaded
-  private felt: Collider | null = null // The table; the one collider that reports events
+  private bowl: Collider | null = null // Kept so a thrown die's first impact can be named
+  private felt: Collider | null = null // The table; reports every die that leaves play
   private events: EventQueue | null = null // Created with the world, and drained by hand
   private readonly landed: ColliderHandle[] = [] // Whatever first touched the felt this frame
+  private readonly impacts: RollImpact[] = [] // First classified impact of each thrown die this frame
+  private readonly thrown = new Set<ColliderHandle>() // Thrown dice still waiting for a first impact
+  private readonly coThrown = new Set<ColliderHandle>() // The whole throw, including classified dice
+  private readonly hitDice = new Set<ColliderHandle>() // Tracked dice that met an old die this step
+  private readonly hitBowl = new Set<ColliderHandle>() // Tracked dice that met the bowl this step
+  private readonly hitFelt = new Set<ColliderHandle>() // Tracked dice that met only the felt this step
   private accumulatedTime = 0 // Frame time left over, waiting for a whole step
   private disposed = false
   private readonly rayDirection = new Vector3() // Scratch, to keep casts allocation free
@@ -92,13 +101,13 @@ export class PhysicsWorld {
     simulation.integrationParameters.normalizedPredictionDistance
       = CONTACT_PREDICTION_DISTANCE / LENGTH_UNIT
 
-    PhysicsWorld.buildBowl(simulation, bowlGeometry)
+    this.bowl = PhysicsWorld.buildBowl(simulation, bowlGeometry)
 
     this.felt = PhysicsWorld.buildFelt(simulation)
 
-    // Deliberately not auto-draining. A frame runs several fixed steps, and an
-    // auto-drained queue is emptied at the start of every one of them, so
-    // every landing but the last would be discarded before it could be read.
+    // Deliberately drained by hand after each fixed step. Besides preserving
+    // every landing across a frame, that keeps impacts in separate time steps:
+    // a die hit in one step must win over a bowl hit in the next.
     this.events = new EventQueue(false)
     this.simulation = simulation
   }
@@ -121,6 +130,7 @@ export class PhysicsWorld {
     }
 
     this.landed.length = 0
+    this.impacts.length = 0
     this.accumulatedTime += deltaTime
 
     // A backgrounded tab hands back one enormous frame. Capping the backlog
@@ -130,10 +140,9 @@ export class PhysicsWorld {
 
     while (this.accumulatedTime >= PHYSICS_TIMESTEP) {
       simulation.step(events)
+      this.collectCollisions()
       this.accumulatedTime -= PHYSICS_TIMESTEP
     }
-
-    this.collectLandings()
   }
 
   /**
@@ -145,6 +154,53 @@ export class PhysicsWorld {
     for (const collider of this.landed) {
       visit(collider)
     }
+  }
+
+  /**
+   * Visits the first classified impact of every die thrown this frame.
+   * @param visit - Called once per die, with what it hit first
+   */
+  forEachRollImpact(visit: (impact: RollImpact) => void): void {
+    for (const impact of this.impacts) {
+      visit(impact)
+    }
+  }
+
+  /**
+   * Watches the dice one throw successfully put into the world.
+   *
+   * Only these colliders ask Rapier for collision events. Resting dice need no
+   * events of their own: touching one is reported through the thrown die, and
+   * the felt already reports its half of every landing.
+   * @param colliders - Every die created for one throw
+   */
+  trackThrow(colliders: ColliderHandle[]): void {
+    this.cancelTrackedThrow()
+
+    const simulation = this.simulation
+
+    if (simulation === null) {
+      return
+    }
+
+    for (const handle of colliders) {
+      simulation.getCollider(handle).setActiveEvents(ActiveEvents.COLLISION_EVENTS)
+      this.thrown.add(handle)
+      this.coThrown.add(handle)
+    }
+  }
+
+  /** Stops waiting for impacts from the current throw, if there is one. */
+  cancelTrackedThrow(): void {
+    for (const handle of this.thrown) {
+      this.stopTracking(handle)
+    }
+
+    this.thrown.clear()
+    this.coThrown.clear()
+    this.hitDice.clear()
+    this.hitBowl.clear()
+    this.hitFelt.clear()
   }
 
   /**
@@ -180,37 +236,43 @@ export class PhysicsWorld {
    */
   dispose(): void {
     this.disposed = true
+    this.cancelTrackedThrow()
     this.events?.free()
     this.events = null
     this.simulation?.free()
     this.simulation = null
+    this.bowl = null
     this.felt = null
 
     // Handles into a world that no longer exists. Nothing reads them after
     // the loop stops, but this class is usable either side of having a world
     // and every other member of it says so.
     this.landed.length = 0
+    this.impacts.length = 0
   }
 
   /**
-   * Drains the frame's collision events into the list of colliders that have
-   * just reached the felt.
+   * Drains one fixed step's collision events into landings and first impacts.
    *
-   * The felt is the only collider asking for events, so every event reported
-   * is one of its own, and an event that ends a contact rather than starting
-   * one is a die being shoved off the table by another, not a landing.
+   * Contacts are gathered before any of them is classified. Rapier does not
+   * state an order for two contacts beginning within one step, so meeting an
+   * old die wins over meeting the bowl there, as the audible result intended.
    *
-   * Which half of the pair is the felt is tested rather than inferred. Reading
-   * "not the felt" as "a die" would be right today and quietly wrong the moment
-   * anything else in the world asked for events of its own.
+   * A co-thrown die is ignored. It remains in coThrown after its own impact has
+   * been classified so that a later sibling cannot mistake it for an old die.
    */
-  private collectLandings(): void {
+  private collectCollisions(): void {
     const events = this.events
+    const bowl = this.bowl
     const felt = this.felt
 
-    if (events === null || felt === null) {
+    if (events === null || bowl === null || felt === null) {
       return
     }
+
+    this.hitDice.clear()
+    this.hitBowl.clear()
+    this.hitFelt.clear()
 
     events.drainCollisionEvents((first, second, started) => {
       if (!started) {
@@ -222,7 +284,64 @@ export class PhysicsWorld {
       } else if (second === felt.handle) {
         this.landed.push(first)
       }
+
+      this.recordCollision(first, second, bowl.handle, felt.handle)
+      this.recordCollision(second, first, bowl.handle, felt.handle)
     })
+
+    for (const collider of this.thrown) {
+      if (this.hitDice.has(collider)) {
+        this.finishImpact(collider, 'multiple')
+      } else if (this.hitBowl.has(collider)) {
+        this.finishImpact(collider, 'single')
+      } else if (this.hitFelt.has(collider)) {
+        // A throw that missed the bowl is already over as far as its first
+        // impact is concerned, but the felt itself remains responsible for
+        // taking the die out of play.
+        this.finishImpact(collider, null)
+      }
+    }
+  }
+
+  /** Records one tracked half of a collision that began this fixed step. */
+  private recordCollision(
+    collider: ColliderHandle,
+    other: ColliderHandle,
+    bowl: ColliderHandle,
+    felt: ColliderHandle,
+  ): void {
+    if (!this.thrown.has(collider) || this.coThrown.has(other)) {
+      return
+    }
+
+    if (other === bowl) {
+      this.hitBowl.add(collider)
+    } else if (other === felt) {
+      this.hitFelt.add(collider)
+    } else {
+      // Bowl, felt and dice are the whole world. With both static colliders
+      // named above, the remaining collider is a die already in the bowl.
+      this.hitDice.add(collider)
+    }
+  }
+
+  /** Retires one thrown collider and emits its audible impact, when it has one. */
+  private finishImpact(collider: ColliderHandle, impact: RollImpact | null): void {
+    this.thrown.delete(collider)
+    this.stopTracking(collider)
+
+    if (impact !== null) {
+      this.impacts.push(impact)
+    }
+  }
+
+  /** Turns off collision events on one die without affecting felt landings. */
+  private stopTracking(handle: ColliderHandle): void {
+    const simulation = this.simulation
+
+    if (simulation !== null) {
+      simulation.getCollider(handle).setActiveEvents(ActiveEvents.NONE)
+    }
   }
 
   /**
@@ -230,8 +349,9 @@ export class PhysicsWorld {
    * being rendered.
    * @param simulation - The world to add the collider to
    * @param geometry - The bowl's revolved shell
+   * @returns The bowl, kept so thrown dice can be recognised touching it
    */
-  private static buildBowl(simulation: World, geometry: BufferGeometry): void {
+  private static buildBowl(simulation: World, geometry: BufferGeometry): Collider {
     const positions = geometry.getAttribute('position')
     const index = geometry.getIndex()
 
@@ -252,13 +372,13 @@ export class PhysicsWorld {
       .setFrictionCombineRule(CoefficientCombineRule.Multiply)
       .setRestitutionCombineRule(CoefficientCombineRule.Multiply)
 
-    simulation.createCollider(descriptor)
+    return simulation.createCollider(descriptor)
   }
 
   /**
    * Installs the felt as a solid slab whose top face sits exactly at table
-   * height. It is the only collider that reports collision events, which makes
-   * every event the engine produces a die arriving at or leaving the table.
+   * height. It reports collision events permanently, which makes every event
+   * involving it a die arriving at or leaving the table.
    * @param simulation - The world to add the collider to
    * @returns The felt, kept so its own events can be told from a die's
    */

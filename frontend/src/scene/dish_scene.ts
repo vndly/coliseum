@@ -13,6 +13,7 @@ import {ACESFilmicToneMapping,
   Timer,
   WebGLRenderer} from 'three'
 import type {WebGLRenderTarget} from 'three'
+import type {ColliderHandle} from '@dimforge/rapier3d-compat'
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js'
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js'
 import {AimPreview} from '@/scene/aim_preview'
@@ -20,6 +21,7 @@ import {Dice} from '@/scene/dice'
 import type {DieSnapshot, ThrowLaunch, ThrowResolution, ThrownDie} from '@/scene/die_state'
 import {Dish} from '@/scene/dish'
 import {PhysicsWorld} from '@/scene/physics_world'
+import type {RollImpact} from '@/scene/physics_world'
 import {Table} from '@/scene/table'
 import {ThrowController} from '@/scene/throw_controller'
 import {BACKGROUND_COLOR,
@@ -113,6 +115,12 @@ export class DishScene {
    * given long enough and is declared at rest regardless.
    */
   onSettled: (() => void) | null = null
+
+  /** Called once for the first audible impact of every die in a throw. */
+  onRollImpact: ((impact: RollImpact) => void) | null = null
+
+  /** Called exactly when a nonempty verdict wash begins. */
+  onVerdictBeat: ((beat: 'fail' | 'return', resolution: ThrowResolution) => void) | null = null
 
   /**
    * Called once a verdict has finished playing and the bowl it leaves behind is
@@ -299,17 +307,22 @@ export class DishScene {
       return
     }
 
-    const before = this.dice.count
+    const thrown: ColliderHandle[] = []
 
     for (const die of dice) {
-      this.dice.throw(this.physics, die.id, die.skin, die.launch)
+      const collider = this.dice.throw(this.physics, die.id, die.skin, die.launch)
+
+      if (collider !== null) {
+        thrown.push(collider)
+      }
     }
 
     // Only a throw that actually put a die in the world is a throw to wait on.
     // A world that never started drops every die it is given, and a settle
     // clock armed over that comes to rest on a bowl this throw never reached —
     // which is then published as the match's own.
-    if (this.dice.count > before) {
+    if (thrown.length > 0) {
+      this.physics.trackThrow(thrown)
       this.throwing = 0
     }
   }
@@ -334,6 +347,7 @@ export class DishScene {
     const identifiers = dice.map((die) => die.id)
 
     this.deferred = this.deferred.filter((die) => !identifiers.includes(die.id))
+    this.physics.cancelTrackedThrow()
     this.dice.withdraw(this.physics, identifiers)
     this.throwing = null
   }
@@ -444,6 +458,9 @@ export class DishScene {
     const deltaTime = Math.min(this.timer.getDelta(), MAX_FRAME_TIME)
 
     this.physics.step(deltaTime)
+    this.physics.forEachRollImpact((impact) => {
+      this.onRollImpact?.(impact)
+    })
     this.dice.update(this.physics, deltaTime)
     this.advanceMatch(deltaTime)
 
@@ -476,6 +493,7 @@ export class DishScene {
 
       if (atRest || timedOut) {
         this.throwing = null
+        this.physics.cancelTrackedThrow()
 
         // The throw is declared over on the timeout whether or not the bowl
         // agreed, and what happens next reads a value off every die in it. So
@@ -593,7 +611,7 @@ export class DishScene {
       }
 
       this.dice.restore(this.physics, resolution.atRest)
-      this.beginBeat('removing', resolution.removed)
+      this.beginBeat('removing', resolution.removed, resolution)
 
       return
     }
@@ -604,7 +622,7 @@ export class DishScene {
 
     if (this.resolutionStage === 'removing') {
       this.dice.dismiss(resolution.removed)
-      this.beginBeat('returning', resolution.returned)
+      this.beginBeat('returning', resolution.returned, resolution)
 
       return
     }
@@ -619,8 +637,13 @@ export class DishScene {
    * all, which is most of them.
    * @param stage - The wash to begin
    * @param identifiers - The dice it would be shown on
+   * @param resolution - The exact verdict this beat belongs to
    */
-  private beginBeat(stage: 'removing' | 'returning', identifiers: string[]): void {
+  private beginBeat(
+    stage: 'removing' | 'returning',
+    identifiers: string[],
+    resolution: ThrowResolution,
+  ): void {
     this.resolutionElapsed = 0
     this.resolutionStage = stage
 
@@ -634,8 +657,10 @@ export class DishScene {
 
     if (stage === 'removing') {
       this.dice.markRemoved(identifiers)
+      this.onVerdictBeat?.('fail', resolution)
     } else {
       this.dice.markReturned(identifiers)
+      this.onVerdictBeat?.('return', resolution)
     }
   }
 
