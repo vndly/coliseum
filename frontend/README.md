@@ -2,9 +2,9 @@
 
 ## TODO
 
-- What other features we can add
-- Allow to throw die with one click
-- Configure how many dice per player
+- What other features we can add?
+- Allow to throw a die with a double click
+- Configure the inital amount of dice per player
 - Tournament
   - Points
     - 1 point per win
