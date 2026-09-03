@@ -1063,8 +1063,8 @@ function onPaste(): void {
    and stretches to whatever the input is tall, so the two read as halves of a
    single control rather than as a field with something bolted beside it */
 .named {
-    display: flex;
-    align-items: stretch;
+    display: grid;
+    grid-template-columns: 1fr auto;
     gap: 0.5rem;
 }
 
@@ -1072,7 +1072,6 @@ function onPaste(): void {
    against the button they came out of and not against the card */
 .picker {
     position: relative;
-    flex: none;
 }
 
 /* Cut out of the card exactly as the field beside it is: same rim, same well,
