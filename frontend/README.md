@@ -2,7 +2,7 @@
 
 ## TODO
 
-- Apocalypse review
+- What other features we can add
 - Allow to throw die with one click
 - Configure how many dice per player
 - Tournament
