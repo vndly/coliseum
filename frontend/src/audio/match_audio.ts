@@ -7,6 +7,9 @@ import rollMultipleAudioUrl from '@/assets/audio/roll-multiple.mp3'
 import rollSingleAudioUrl from '@/assets/audio/roll-single.mp3'
 import winAudioUrl from '@/assets/audio/win.mp3'
 
+const MUSIC_ENABLED_KEY = 'coliseum.music-enabled'
+const EFFECTS_ENABLED_KEY = 'coliseum.effects-enabled'
+
 /**
  * Owns the music and sound effects played during a match.
  *
@@ -21,20 +24,74 @@ export class MatchAudio {
   private readonly musicAudio = new Audio(musicAudioUrl)
   private readonly pairAudio = new Audio(pairAudioUrl)
   private readonly winAudio = new Audio(winAudioUrl)
-  private readonly reusableAudio = [
+  private readonly effectAudio = [
     this.failAudio,
     this.flushAudio,
     this.lostAudio,
-    this.musicAudio,
     this.pairAudio,
     this.winAudio,
   ]
+  private readonly reusableAudio = [
+    ...this.effectAudio,
+    this.musicAudio,
+  ]
   private readonly rollVoices = new Map<HTMLAudioElement, () => void>()
+  private musicEnabled = MatchAudio.rememberedEnabled(MUSIC_ENABLED_KEY)
+  private effectsEnabled = MatchAudio.rememberedEnabled(EFFECTS_ENABLED_KEY)
   private awaitingMusicGesture = false
+  private musicRequested = false
   private disposed = false
 
   constructor() {
     this.musicAudio.loop = true
+  }
+
+  /** Whether this browser has match music enabled. */
+  get isMusicEnabled(): boolean {
+    return this.musicEnabled
+  }
+
+  /** Whether this browser has match sound effects enabled. */
+  get isEffectsEnabled(): boolean {
+    return this.effectsEnabled
+  }
+
+  /**
+   * Enables or disables match music for this browser.
+   * @param enabled - Whether music may play
+   */
+  setMusicEnabled(enabled: boolean): void {
+    this.musicEnabled = enabled
+    MatchAudio.rememberEnabled(MUSIC_ENABLED_KEY, enabled)
+
+    if (!enabled) {
+      this.stopAwaitingMusicGesture()
+      this.musicAudio.pause()
+      return
+    }
+
+    if (this.musicRequested) {
+      this.playMusic()
+    }
+  }
+
+  /**
+   * Enables or disables match sound effects for this browser.
+   * @param enabled - Whether sound effects may play
+   */
+  setEffectsEnabled(enabled: boolean): void {
+    this.effectsEnabled = enabled
+    MatchAudio.rememberEnabled(EFFECTS_ENABLED_KEY, enabled)
+
+    if (enabled) {
+      return
+    }
+
+    for (const audio of this.effectAudio) {
+      MatchAudio.reset(audio)
+    }
+
+    this.stopRollVoices()
   }
 
   /**
@@ -46,13 +103,11 @@ export class MatchAudio {
       return
     }
 
-    void this.musicAudio.play().then(() => {
-      this.stopAwaitingMusicGesture()
-    }).catch(() => {
-      if (!this.disposed) {
-        this.awaitMusicGesture()
-      }
-    })
+    this.musicRequested = true
+
+    if (this.musicEnabled) {
+      this.playMusic()
+    }
   }
 
   /** Plays the failed-turn sound from its beginning. */
@@ -93,19 +148,14 @@ export class MatchAudio {
   /** Stops all audio and removes every listener owned by this match. */
   dispose(): void {
     this.disposed = true
+    this.musicRequested = false
     this.stopAwaitingMusicGesture()
 
     for (const audio of this.reusableAudio) {
       MatchAudio.reset(audio)
     }
 
-    this.rollVoices.forEach((onStopped, audio) => {
-      audio.removeEventListener('ended', onStopped)
-      audio.removeEventListener('error', onStopped)
-      MatchAudio.reset(audio)
-    })
-
-    this.rollVoices.clear()
+    this.stopRollVoices()
   }
 
   /**
@@ -115,11 +165,35 @@ export class MatchAudio {
   private readonly retryMusic = (): void => {
     this.stopAwaitingMusicGesture()
 
-    if (this.disposed) {
+    if (this.disposed || !this.musicEnabled || !this.musicRequested) {
       return
     }
 
-    void this.musicAudio.play().catch(() => {})
+    this.playMusic(false)
+  }
+
+  /**
+   * Plays music from its current position and optionally waits for an input if
+   * the browser refuses autoplay.
+   * @param awaitGesture - Whether an autoplay refusal should install a retry
+   */
+  private playMusic(awaitGesture = true): void {
+    if (this.disposed || !this.musicEnabled || !this.musicRequested) {
+      return
+    }
+
+    void this.musicAudio.play().then(() => {
+      this.stopAwaitingMusicGesture()
+    }).catch(() => {
+      if (
+        awaitGesture
+        && !this.disposed
+        && this.musicEnabled
+        && this.musicRequested
+      ) {
+        this.awaitMusicGesture()
+      }
+    })
   }
 
   /** Installs the two listeners that can unlock autoplay. */
@@ -149,7 +223,7 @@ export class MatchAudio {
    * @param audio - Player to restart
    */
   private playFromStart(audio: HTMLAudioElement): void {
-    if (this.disposed) {
+    if (this.disposed || !this.effectsEnabled) {
       return
     }
 
@@ -162,7 +236,7 @@ export class MatchAudio {
    * @param source - Imported URL for the roll recording
    */
   private playRoll(source: string): void {
-    if (this.disposed) {
+    if (this.disposed || !this.effectsEnabled) {
       return
     }
 
@@ -177,6 +251,44 @@ export class MatchAudio {
     audio.addEventListener('ended', onStopped)
     audio.addEventListener('error', onStopped)
     void audio.play().catch(onStopped)
+  }
+
+  /** Stops and forgets every independent roll voice. */
+  private stopRollVoices(): void {
+    this.rollVoices.forEach((onStopped, audio) => {
+      audio.removeEventListener('ended', onStopped)
+      audio.removeEventListener('error', onStopped)
+      MatchAudio.reset(audio)
+    })
+
+    this.rollVoices.clear()
+  }
+
+  /**
+   * Reads an audio preference without making storage availability a condition
+   * of entering a match.
+   * @param key - Preference key to read
+   * @returns False only when this browser explicitly stored false
+   */
+  private static rememberedEnabled(key: string): boolean {
+    try {
+      return localStorage.getItem(key) !== 'false'
+    } catch {
+      return true
+    }
+  }
+
+  /**
+   * Persists an audio preference when storage is available.
+   * @param key - Preference key to write
+   * @param enabled - Preference value to store
+   */
+  private static rememberEnabled(key: string, enabled: boolean): void {
+    try {
+      localStorage.setItem(key, String(enabled))
+    } catch {
+      // Storage is blocked; the preference still applies to this match
+    }
   }
 
   /**

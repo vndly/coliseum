@@ -30,6 +30,7 @@ import {DishScene} from '@/scene/dish_scene'
 
 const route = useRoute()
 const router = useRouter()
+const matchAudio = new MatchAudio()
 
 const parameter = route.params.code
 
@@ -89,7 +90,6 @@ const BOT_PAUSE_MAXIMUM = 1400
 // reactivity, and the client and the counters are only ever read from callbacks
 // that already know when they changed
 let scene: DishScene | null = null
-let matchAudio: MatchAudio | null = null
 let client: MatchClient | null = null
 let pendingSeq = 0 // The throw made here that is waiting to come to rest
 let pendingThrower = '' // The seat that throw was made from, which is a bot's on a bot's turn
@@ -124,6 +124,8 @@ const unreadable = ref(false) // Whether the match itself can no longer be read
 const botDriver = ref(false) // Whether this view is the one playing the seats nobody is behind
 const copyResult = ref<'none' | 'done' | 'failed'>('none') // What the last press of copy came to
 const error = ref('')
+const musicEnabled = ref(matchAudio.isMusicEnabled)
+const effectsEnabled = ref(matchAudio.isEffectsEnabled)
 
 const activePlayer = computed<MatchPlayer | null>(() => {
   const match = state.value
@@ -347,6 +349,12 @@ const noticeShowing = computed<boolean>(
  */
 const behindNotice = computed<true | undefined>(() => noticeShowing.value || undefined)
 
+// The audio switches stay in the table before and during play, but never sit
+// in the keyboard or pointer path while another layer owns the whole screen.
+const audioControlsInert = computed<true | undefined>(
+  () => noticeShowing.value || calling.value || undefined,
+)
+
 const winnerLine = computed<string>(() => {
   const match = state.value
 
@@ -459,14 +467,14 @@ watch(noticeShowing, (showing) => {
 // through the final card so that the end of the match does not turn silent.
 watch(playing, (started) => {
   if (started) {
-    matchAudio?.startMusic()
+    matchAudio.startMusic()
   }
 })
 
 // In a match with more than two seats, defeat can be known before the match is
 // over. That first notice owns the sound; the final card must not play it again.
 watch(showLoss, (showing) => {
-  if (!showing || lossSoundPlayed || matchAudio === null) {
+  if (!showing || lossSoundPlayed) {
     return
   }
 
@@ -479,7 +487,7 @@ watch(showLoss, (showing) => {
 watch(showEnd, (showing) => {
   const match = state.value
 
-  if (!showing || endSoundPlayed || match === null || matchAudio === null) {
+  if (!showing || endSoundPlayed || match === null) {
     return
   }
 
@@ -881,6 +889,20 @@ function onPass(): void {
   })
 }
 
+function onToggleMusic(): void {
+  const enabled = !musicEnabled.value
+
+  matchAudio.setMusicEnabled(enabled)
+  musicEnabled.value = enabled
+}
+
+function onToggleEffects(): void {
+  const enabled = !effectsEnabled.value
+
+  matchAudio.setEffectsEnabled(enabled)
+  effectsEnabled.value = enabled
+}
+
 function onKeepWatching(): void {
   acknowledgedLoss.value = true
 }
@@ -1156,20 +1178,19 @@ onMounted(() => {
     return
   }
 
-  matchAudio = new MatchAudio()
   scene = new DishScene(element)
   scene.onLaunch = onLaunch
   scene.onSettled = onSettled
   scene.onRollImpact = (impact) => {
     if (impact === 'single') {
-      matchAudio?.playRollSingle()
+      matchAudio.playRollSingle()
     } else {
-      matchAudio?.playRollMultiple()
+      matchAudio.playRollMultiple()
     }
   }
   scene.onVerdictBeat = (beat, resolution) => {
     if (beat === 'fail') {
-      matchAudio?.playFail()
+      matchAudio.playFail()
 
       return
     }
@@ -1177,9 +1198,9 @@ onMounted(() => {
     const kind = returnedDiceKind(resolution)
 
     if (kind === 'flush') {
-      matchAudio?.playFlush()
+      matchAudio.playFlush()
     } else if (kind === 'pair') {
-      matchAudio?.playPair()
+      matchAudio.playPair()
     }
   }
   scene.onResolved = () => {
@@ -1220,8 +1241,7 @@ onBeforeUnmount(() => {
   client = null
   scene?.dispose()
   scene = null
-  matchAudio?.dispose()
-  matchAudio = null
+  matchAudio.dispose()
 
   // Last, behind the connection and the scene. Nothing above it needs the
   // screen awake, and everything above it matters more than whether this
@@ -1247,6 +1267,54 @@ onBeforeUnmount(() => {
       class="match__canvas"
       @contextmenu.prevent
     />
+
+    <!-- Two direct switches rather than a settings drawer: sound is adjusted
+         in the moment, and neither choice is buried behind another press. -->
+    <div
+      v-if="!unreadable"
+      class="audio-controls"
+      role="group"
+      aria-label="Audio"
+      :inert="audioControlsInert"
+    >
+      <button
+        type="button"
+        class="audio-toggle"
+        :class="{'audio-toggle--off': !musicEnabled}"
+        aria-label="Background music"
+        :aria-pressed="musicEnabled"
+        :title="musicEnabled ? 'Turn music off' : 'Turn music on'"
+        @pointerdown.stop
+        @keydown.stop
+        @click="onToggleMusic"
+      >
+        <svg class="audio-toggle__icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M9 17V5l10-2v12" />
+          <circle cx="6.5" cy="17.5" r="2.5" />
+          <circle cx="16.5" cy="15.5" r="2.5" />
+          <path v-if="!musicEnabled" class="audio-toggle__slash" d="M4 4l16 16" />
+        </svg>
+      </button>
+
+      <button
+        type="button"
+        class="audio-toggle"
+        :class="{'audio-toggle--off': !effectsEnabled}"
+        aria-label="Sound effects"
+        :aria-pressed="effectsEnabled"
+        :title="effectsEnabled ? 'Turn sound effects off' : 'Turn sound effects on'"
+        @click="onToggleEffects"
+      >
+        <svg class="audio-toggle__icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 9h4l5-4v14l-5-4H4z" />
+          <template v-if="effectsEnabled">
+            <path d="M16 9.5a4 4 0 0 1 0 5" />
+            <path d="M18.5 6.5a8 8 0 0 1 0 11" />
+          </template>
+          <path v-else class="audio-toggle__slash" d="M4 4l16 16" />
+        </svg>
+      </button>
+    </div>
 
     <!-- Mounted from the first frame and merely covered while the seats fill,
          so the wait for the last player is also the wait for the physics.
@@ -1487,6 +1555,64 @@ onBeforeUnmount(() => {
     touch-action: none;
 }
 
+/* Set into one small fitting at the table's empty upper-left corner. The two
+   wells read as hardware belonging to the table rather than floating app
+   chrome, and leave the upper-right to the players it already names. */
+.audio-controls {
+    position: absolute;
+    z-index: 1;
+    top: calc(1.25rem + env(safe-area-inset-top, 0px));
+    left: calc(1.25rem + env(safe-area-inset-left, 0px));
+    display: flex;
+    gap: 0.25rem;
+    padding: 0.25rem;
+    border: 1px solid var(--brass-edge);
+    border-radius: 999px;
+    background: rgb(18 11 6 / 78%);
+    box-shadow:
+        inset 0 1px 0 rgb(200 164 104 / 18%),
+        0 0.5rem 1.25rem rgb(0 0 0 / 24%);
+}
+
+.audio-toggle {
+    display: grid;
+    width: 2.75rem;
+    height: 2.75rem;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: var(--brass-glow);
+    color: var(--brass);
+    cursor: pointer;
+    transition: background 160ms ease, color 160ms ease;
+}
+
+.audio-toggle:hover {
+    background: rgb(200 164 104 / 20%);
+}
+
+.audio-toggle--off {
+    background: transparent;
+    color: var(--bone-faint);
+}
+
+.audio-toggle__icon {
+    width: 1.25rem;
+    height: 1.25rem;
+    overflow: visible;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.audio-toggle__slash {
+    color: var(--ember);
+    stroke-width: 2;
+}
+
 .label {
     font: var(--plate);
     letter-spacing: var(--plate-tracking);
@@ -1636,6 +1762,7 @@ onBeforeUnmount(() => {
     align-items: flex-start;
     justify-content: flex-end;
     gap: 1rem;
+    padding-left: calc(6.5rem + env(safe-area-inset-left, 0px));
 }
 
 .rail {
@@ -1643,6 +1770,8 @@ onBeforeUnmount(() => {
     flex-wrap: wrap;
     justify-content: flex-end;
     gap: 0.5rem;
+    min-width: 0;
+    max-width: 100%;
     list-style: none;
 }
 
@@ -1650,6 +1779,8 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
     gap: 0.625rem;
+    min-width: 0;
+    max-width: 100%;
     padding: 0.625rem 1rem;
     border: 1px solid transparent;
     border-radius: 999px;
@@ -1691,7 +1822,11 @@ onBeforeUnmount(() => {
 }
 
 .rail__name {
+    min-width: 0;
+    overflow: hidden;
     font-size: 0.8125rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     color: var(--bone-dim);
 }
 
@@ -1829,6 +1964,7 @@ onBeforeUnmount(() => {
        the table zoomed long after the call has gone. The canvas gives this up
        for the same reason. */
     touch-action: none;
+    z-index: 2;
 }
 
 /* The whole of the call, so it is set at the size of a thing said across a room
@@ -1885,6 +2021,7 @@ onBeforeUnmount(() => {
     justify-content: center;
     padding: 1.25rem;
     background: rgb(14 18 16 / 62%);
+    z-index: 2;
 }
 
 .notice__card {
