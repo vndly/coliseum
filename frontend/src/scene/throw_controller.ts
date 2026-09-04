@@ -7,6 +7,11 @@ import {AIM_DOT_COUNT,
   BOWL_INTERIOR_FLOOR_HEIGHT,
   CAMERA_FAR,
   DIE_LAUNCH_SPIN,
+  DROP_CLOUD_SPACING,
+  DROP_DOUBLE_PRESS_SLOP,
+  DROP_DOUBLE_PRESS_TIME,
+  DROP_HEIGHT,
+  DROP_MAX_RADIUS,
   GRAVITY,
   THROW_CLEARANCE_HEIGHT,
   THROW_CLEARANCE_RADIUS,
@@ -25,6 +30,50 @@ import {AIM_DOT_COUNT,
 // mouse button, a finger in contact, or a pen tip. Anything else in the mask
 // is a second button that has joined the first.
 const PRIMARY_BUTTON_ONLY = 1
+
+/**
+ * How far the cloud's lattice reaches in each direction, in cells. Two is a
+ * five by five by five block, which is well past the thirty-six dice a match
+ * can hold and so past the largest hand that can ever be dropped at once.
+ */
+const CLOUD_CELL_REACH = 2
+
+/**
+ * Builds the order a dropped cloud fills its lattice in.
+ *
+ * Nearest the middle first, so that the cloud a hand makes is the tightest one
+ * that holds its dice apart, and so that which cell a die sits in depends on
+ * its own place in the hand and not on how large the hand is — the same rule
+ * the fan's rings are built by, and what keeps a hand of six dropped from
+ * exactly the shape it has always been dropped from.
+ *
+ * Cells the same distance out are separated by a fixed order rather than left
+ * to the sort, so the shape is the one thing about a drop that is never drawn
+ * afresh: every player builds the cloud from the thrower's description, and
+ * the description is only the dice, not the lattice they came out of.
+ * @returns Every cell of the lattice, in fill order
+ */
+function buildCloudCells(): Vector3[] {
+  const cells: Vector3[] = []
+
+  for (let x = -CLOUD_CELL_REACH; x <= CLOUD_CELL_REACH; x++) {
+    for (let y = -CLOUD_CELL_REACH; y <= CLOUD_CELL_REACH; y++) {
+      for (let z = -CLOUD_CELL_REACH; z <= CLOUD_CELL_REACH; z++) {
+        cells.push(new Vector3(x, y, z))
+      }
+    }
+  }
+
+  cells.sort((first, second) => first.lengthSq() - second.lengthSq()
+    || first.y - second.y
+    || first.x - second.x
+    || first.z - second.z)
+
+  return cells
+}
+
+/** The lattice a dropped cloud is packed into, in fill order. */
+const CLOUD_CELLS = buildCloudCells()
 
 /**
  * Turns a drag across the canvas into a thrown die.
@@ -55,6 +104,15 @@ const PRIMARY_BUTTON_ONLY = 1
  * release produces is a description of a throw and not a die — including the
  * attitude and the tumble, which are drawn here rather than where the die is
  * built precisely so that every player builds the same one.
+ *
+ * A double press throws differently, and is the one gesture here that is not a
+ * line: the dice are let go directly above the spot pressed on, at rest, and
+ * fall. Nothing is aimed because nothing travels — which is also why a drop
+ * pointed outside the bowl is refused rather than pulled back into it, and why
+ * a whole hand comes down as a packed cloud rather than the fan a thrown hand
+ * spreads into. The double press is measured here rather than taken from the
+ * browser's own dblclick, which arrives only after the second release has
+ * already thrown whatever drag it was part of.
  *
  * An aim can be abandoned as well as finished, and the ways out are the ones
  * the hand already on the controls can reach: another mouse button, a second
@@ -90,6 +148,9 @@ export class ThrowController {
   private readonly launchRay = new Vector3() // Scratch, for lifting the launch
   private readonly downPointers = new Set<number>() // Every pointer currently held down
   private activePointer: number | null = null // Null whenever no throw is being aimed
+  private lastPressTime = Number.NEGATIVE_INFINITY // When the last press that could open a double press arrived
+  private lastPressX = 0 // And where on screen it landed, in client pixels
+  private lastPressY = 0
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -190,7 +251,10 @@ export class ThrowController {
     this.clampToThrowRadius(this.launchGround)
 
     if (this.buildLaunch(count)) {
-      this.launch(this.describeLaunches(count))
+      this.launch(this.describeLaunches(
+        count,
+        (index) => ThrowController.fanOffset(index, count),
+      ))
     }
   }
 
@@ -249,7 +313,20 @@ export class ThrowController {
       return
     }
 
+    const doublePress = this.consumeDoublePress(event)
+
     if (!this.projectToScene(event, this.targetPoint)) {
+      return
+    }
+
+    // A drop leaves on the press rather than waiting for the release, and the
+    // pointer is deliberately left inactive behind it: the release that
+    // follows then falls out of onPointerUp on its own identity check, which
+    // is what stops one gesture throwing both a drop and the drag its second
+    // press would otherwise have been the beginning of.
+    if (doublePress) {
+      this.drop()
+
       return
     }
 
@@ -308,7 +385,10 @@ export class ThrowController {
     }
 
     if (this.buildLaunch(this.count)) {
-      this.launch(this.describeLaunches(this.count))
+      this.launch(this.describeLaunches(
+        this.count,
+        (index) => ThrowController.fanOffset(index, this.count),
+      ))
     }
 
     this.cancel()
@@ -335,6 +415,93 @@ export class ThrowController {
     }
 
     this.cancel()
+  }
+
+  /**
+   * Whether a press closes a double press, and records it as the one a later
+   * press is measured against either way.
+   *
+   * A press that closes a pair is deliberately not left standing as the
+   * opening of the next one. Otherwise a third press inside the window would
+   * close another pair, and a finger tapping steadily would drop on every
+   * press after the first rather than on every second one.
+   * @param event - The press to weigh
+   * @returns Whether it is the second of a double press
+   */
+  private consumeDoublePress(event: PointerEvent): boolean {
+    const doubled = event.timeStamp - this.lastPressTime <= DROP_DOUBLE_PRESS_TIME
+      && Math.hypot(
+        event.clientX - this.lastPressX,
+        event.clientY - this.lastPressY,
+      ) <= DROP_DOUBLE_PRESS_SLOP
+
+    this.lastPressTime = doubled ? Number.NEGATIVE_INFINITY : event.timeStamp
+    this.lastPressX = event.clientX
+    this.lastPressY = event.clientY
+
+    return doubled
+  }
+
+  /**
+   * Lets the hand go above the point the press was already projected onto.
+   */
+  private drop(): void {
+    if (!this.buildDrop(this.count)) {
+      return
+    }
+
+    this.launch(this.describeLaunches(
+      this.count,
+      (index) => ThrowController.cloudOffset(index),
+    ))
+  }
+
+  /**
+   * Works out where a drop is let go from, for the point currently pressed on.
+   * @param count - How many dice the drop puts in the air, which is what makes the cloud tall
+   * @returns Whether that point is one a drop may be made over at all
+   */
+  private buildDrop(count: number): boolean {
+    // Refused rather than pulled back in. A drag that runs long still
+    // describes the throw the hand meant and is clamped to the longest one it
+    // can make; a drop lands where it was pointed and nowhere else, so a drop
+    // pointed off the floor is a gesture with no throw in it.
+    //
+    // Measured to the outside of the cloud rather than to its middle, the same
+    // way the fan's clearance is widened by the ring it has to carry over. A
+    // cloud is let go above the bowl rather than beside it, so a die of it
+    // hanging outside this reach is not thrown badly — it is released over the
+    // bead, or past the bowl altogether, and comes down on the felt, where a
+    // die leaves the match for good. The cloud is deep as well as wide, and
+    // the dice on its lower layers hang level with the wall itself, which is
+    // solid: this is the one bound that keeps them out of it.
+    if (Math.hypot(this.targetPoint.x, this.targetPoint.z)
+      + ThrowController.cloudRadius(count) > DROP_MAX_RADIUS) {
+      return false
+    }
+
+    // Raised by the cloud's own depth, so the height is the one the lowest die
+    // of it falls from whatever the size of the hand — and so that the bottom
+    // of a large cloud does not begin inside the floor.
+    //
+    // Deliberately not held under the camera the way an aimed launch is. That
+    // clamp is there because a launch above the camera lies behind it along
+    // the ray the lift walks back up; a drop walks no ray, so a cloud higher
+    // than the camera is merely out of shot for the moment it takes to fall
+    // into it, and pulling it down instead would put its lowest dice through
+    // the floor the raise above just cleared.
+    this.launchOrigin.set(
+      this.targetPoint.x,
+      DROP_HEIGHT + ThrowController.cloudDepth(count),
+      this.targetPoint.z,
+    )
+
+    // Nothing but gravity. A drop is the one throw with no line behind it, so
+    // there is no length to read a speed off and nothing for the flight time
+    // to solve against.
+    this.launchVelocity.set(0, 0, 0)
+
+    return true
   }
 
   /**
@@ -493,21 +660,26 @@ export class ThrowController {
    * Every die of a fan is given the same velocity. What separates them is where
    * they start and how they are turning, which is enough: they arrive as a
    * loose group, and what a bowl full of dice does to itself does the rest.
+   *
+   * How they are spread is the gesture's own, and is the whole of what a drop
+   * changes here: a thrown hand fans out across the ground it is thrown from,
+   * and a dropped one packs into a cloud above the spot it is let go over.
    * @param count - How many dice the throw puts in the air
+   * @param offsetOf - Where each die of it starts, relative to the launch
    * @returns The throw, ready both to be sent and to be made
    */
-  private describeLaunches(count: number): ThrowLaunch[] {
+  private describeLaunches(count: number, offsetOf: (index: number) => Vector3): ThrowLaunch[] {
     const launches: ThrowLaunch[] = []
 
     for (let index = 0; index < count; index++) {
       const orientation = ThrowController.randomOrientation()
       const spin = ThrowController.randomSpin()
-      const offset = ThrowController.fanOffset(index, count)
+      const offset = offsetOf(index)
 
       launches.push({
         origin: [
           this.launchOrigin.x + offset.x,
-          this.launchOrigin.y,
+          this.launchOrigin.y + offset.y,
           this.launchOrigin.z + offset.z,
         ],
         velocity: [
@@ -626,6 +798,61 @@ export class ThrowController {
    */
   private static ringCapacity(ring: number): number {
     return Math.floor(2 * Math.PI * ring)
+  }
+
+  /**
+   * Where one die of a dropped cloud starts, relative to the drop itself.
+   *
+   * Answered from the die's own place in the hand alone, exactly as the fan's
+   * ring is, and in all three directions rather than only across the ground —
+   * spreading a dropped hand sideways is what would put its outermost dice
+   * over the wall instead of over the floor.
+   * @param index - Which die of the cloud this is
+   * @returns The offset, in every direction
+   */
+  private static cloudOffset(index: number): Vector3 {
+    const cell = CLOUD_CELLS[index]
+
+    // Only reachable by a hand larger than any a match can deal
+    if (cell === undefined) {
+      return new Vector3()
+    }
+
+    return cell.clone().multiplyScalar(DROP_CLOUD_SPACING)
+  }
+
+  /**
+   * How far from its axis the outermost die of a cloud sits. The counterpart
+   * of the fan's own radius, and asked for the same reason: what has to stay
+   * inside the bowl is the whole cloud and not the point it is let go over.
+   * @param count - How many dice the cloud holds
+   * @returns The reach the drop's own bound has to leave room for
+   */
+  private static cloudRadius(count: number): number {
+    let radius = 0
+
+    for (let index = 0; index < count; index++) {
+      const offset = ThrowController.cloudOffset(index)
+
+      radius = Math.max(radius, Math.hypot(offset.x, offset.z))
+    }
+
+    return radius
+  }
+
+  /**
+   * How far below its middle the lowest die of a cloud sits.
+   * @param count - How many dice the cloud holds
+   * @returns The height a drop has to be raised by to keep that die off the floor
+   */
+  private static cloudDepth(count: number): number {
+    let depth = 0
+
+    for (let index = 0; index < count; index++) {
+      depth = Math.max(depth, -ThrowController.cloudOffset(index).y)
+    }
+
+    return depth
   }
 
   /**

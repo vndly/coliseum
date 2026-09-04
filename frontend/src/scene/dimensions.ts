@@ -618,6 +618,69 @@ export const UNAIMED_DRAG_MAXIMUM = 4.5
 export const UNAIMED_BEARING_SPREAD = Math.PI / 3 // 60° either way
 
 // ============================================
+// Drop
+// ============================================
+
+/**
+ * How long after one press a second is still part of the same double press,
+ * and how far it is allowed to have moved between them.
+ *
+ * The double press is measured here rather than left to the browser's own
+ * dblclick, for two reasons. That event arrives after the second release, by
+ * which time the release has already thrown the drag it was part of; and the
+ * canvas takes touch-action: none, which leaves a double tap synthesising a
+ * dblclick or not according to the browser. Measured at the press instead, the
+ * drop is decided before anything else can be thrown.
+ */
+export const DROP_DOUBLE_PRESS_TIME = 400 // Milliseconds
+export const DROP_DOUBLE_PRESS_SLOP = 12 // Pixels
+
+/**
+ * How far from the bowl's axis a drop may be aimed.
+ *
+ * The flat part of the inside base, less the die's own width so that the whole
+ * body is over the floor and not just the point at its centre — the same reach
+ * the opening die is placed within. A drop aimed past it is refused rather
+ * than pulled back in: a drag that runs long still describes the throw the
+ * hand meant and is clamped to the furthest one it can make, but a drop lands
+ * where it was pointed and nowhere else, so a drop pointed outside the bowl is
+ * a gesture with no throw in it at all.
+ */
+export const DROP_MAX_RADIUS = BOWL_INTERIOR_FLOOR_RADIUS - DIE_SIZE
+
+/**
+ * How far above the table the lowest die of a drop begins.
+ *
+ * Measured from the lowest die rather than from the middle of the cloud, so
+ * that a hand of one and a hand of six are let go from the same height and
+ * neither has a die starting inside the floor. The cloud is built upwards from
+ * there.
+ *
+ * Twice the bowl's own height, which is well clear of a placement: gravity
+ * here is twenty times its metric self, so the die spends about three tenths
+ * of a second in the air and arrives at some fifty-five units a second, twice
+ * as hard as an aimed throw lands. A drop is the harder way into the bowl, not
+ * the quieter one, and it scatters what is already in there accordingly.
+ *
+ * The cloud is released above the frame at most camera angles and falls into
+ * it. That is deliberate, and the same licence an aimed launch takes: the end
+ * that matters is the one the dice land on.
+ */
+export const DROP_HEIGHT = BOWL_RIM_HEIGHT * 2
+
+/**
+ * The least distance a drop leaves between the centres of two of its dice.
+ *
+ * Wider than the fan's spacing, and for a reason the fan does not have. A die
+ * on the ring has two neighbours; a die in the middle of a cloud has six, so
+ * the chance that some pair of them starts overlapping — which a solver
+ * answers by firing them apart — goes up with every one of them. This is a
+ * die's own diagonal, which is the distance at which no two of them can
+ * overlap whatever attitude each was drawn in.
+ */
+export const DROP_CLOUD_SPACING = DIE_SIZE * Math.sqrt(3)
+
+// ============================================
 // Aim preview
 // ============================================
 
