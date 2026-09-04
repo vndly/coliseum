@@ -2,7 +2,6 @@
 
 ## TODO
 
-- Allow to throw a die with a double click
 - New rules
   - Flush
   - Triples-only

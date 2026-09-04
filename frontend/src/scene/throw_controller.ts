@@ -140,6 +140,7 @@ export class ThrowController {
   private readonly table = new Plane(new Vector3(0, 1, 0), 0) // The felt, at height zero
   private readonly pointer = new Vector2() // Normalised device coordinates
   private readonly targetPoint = new Vector3() // Where the die is to land
+  private readonly pressGround = new Vector3() // The table under where the gesture began
   private readonly launchGround = new Vector3() // The table under where it is thrown from
   private readonly launchOrigin = new Vector3()
   private readonly launchVelocity = new Vector3()
@@ -237,6 +238,12 @@ export class ThrowController {
     const dragAngle = Math.atan2(this.camera.position.z, this.camera.position.x)
       + Math.PI
       + (Math.random() * 2 - 1) * UNAIMED_BEARING_SPREAD
+
+    // The end a hand would have pressed on. Nothing pressed here, so it is
+    // placed rather than projected — under the landing point, which is where a
+    // gesture drawn to land there would have begun — and it is what the dead
+    // zone measures the drawn line against, exactly as it measures a hand's.
+    this.pressGround.set(this.targetPoint.x, 0, this.targetPoint.z)
 
     this.launchGround.set(
       this.targetPoint.x + Math.cos(dragAngle) * drag,
@@ -337,8 +344,23 @@ export class ThrowController {
     this.activePointer = event.pointerId
     this.canvas.setPointerCapture(event.pointerId)
 
+    // Where the press itself meets the table, which is what the hand's own
+    // movement is later measured from. Read the same way the release is read,
+    // and deliberately not taken from the target: the target sits on whatever
+    // the ray actually hit, and the same ray carries on past it to the table,
+    // so the two are a parallax apart — a gap that grows with the height of
+    // what was pressed on and with how far the camera is tilted down, and that
+    // a motionless hand would otherwise be charged for as though it had
+    // dragged. On a die already in the bowl, seen from a low camera, that
+    // phantom runs past the dead zone and a bare press throws.
+    if (!this.projectToTable(event, this.pressGround)) {
+      this.pressGround.set(this.targetPoint.x, 0, this.targetPoint.z)
+    }
+
+    this.clampToThrowRadius(this.pressGround)
+
     // A line of no length, so the preview stays down until the drag is a throw
-    this.launchGround.set(this.targetPoint.x, 0, this.targetPoint.z)
+    this.launchGround.copy(this.pressGround)
     this.updatePreview()
   }
 
@@ -462,22 +484,34 @@ export class ThrowController {
    * @returns Whether that point is one a drop may be made over at all
    */
   private buildDrop(count: number): boolean {
-    // Refused rather than pulled back in. A drag that runs long still
-    // describes the throw the hand meant and is clamped to the longest one it
-    // can make; a drop lands where it was pointed and nowhere else, so a drop
-    // pointed off the floor is a gesture with no throw in it.
-    //
-    // Measured to the outside of the cloud rather than to its middle, the same
-    // way the fan's clearance is widened by the ring it has to carry over. A
-    // cloud is let go above the bowl rather than beside it, so a die of it
-    // hanging outside this reach is not thrown badly — it is released over the
-    // bead, or past the bowl altogether, and comes down on the felt, where a
-    // die leaves the match for good. The cloud is deep as well as wide, and
-    // the dice on its lower layers hang level with the wall itself, which is
-    // solid: this is the one bound that keeps them out of it.
-    if (Math.hypot(this.targetPoint.x, this.targetPoint.z)
-      + ThrowController.cloudRadius(count) > DROP_MAX_RADIUS) {
+    const radius = Math.hypot(this.targetPoint.x, this.targetPoint.z)
+
+    // Only a press that missed the bowl is refused. A drag that runs long
+    // still describes the throw the hand meant, but a drop lands where it was
+    // pointed and nowhere else, so a drop pointed past the mouth is a gesture
+    // with no throw in it.
+    if (radius > DROP_MAX_RADIUS) {
       return false
+    }
+
+    // Inside the mouth the drop always happens, and it is the cloud that gives
+    // way rather than the gesture. A hand wide enough to hang one of its own
+    // dice over the bead is walked back toward the axis until every die of it
+    // is over the mouth — a die released outside it comes down on the felt,
+    // where a die leaves the match for good, and no hand should have to be
+    // aimed around the shape of the cloud it happens to make. The dice land
+    // nearer the middle than they were pointed, which is a bowl that reads
+    // differently from the one asked for and never a die fewer.
+    //
+    // A hand of one has no cloud and so is never moved: an ordinary turn drops
+    // exactly where it was pressed, anywhere inside the bowl.
+    const reach = Math.max(DROP_MAX_RADIUS - ThrowController.cloudRadius(count), 0)
+
+    if (radius > reach) {
+      const scale = reach / radius
+
+      this.targetPoint.x *= scale
+      this.targetPoint.z *= scale
     }
 
     // Raised by the cloud's own depth, so the height is the one the lowest die
@@ -601,16 +635,38 @@ export class ThrowController {
    * @returns Whether the line is long enough to be a throw at all
    */
   private buildLaunch(count: number): boolean {
-    // Measured across the ground rather than along the line, because the line
-    // is never shorter than the launch height and a bare click would clear any
-    // dead zone stated in three dimensions
-    const dragX = this.launchGround.x - this.targetPoint.x
-    const dragZ = this.launchGround.z - this.targetPoint.z
-    const dragLength = Math.hypot(dragX, dragZ)
+    // Two lengths, because two different questions are being asked, and only
+    // one of them is about the hand.
+    //
+    // The dead zone asks whether the hand moved at all, so it is measured
+    // between the two ends of the gesture — both of them the table under a
+    // pointer, read the same way, so that a hand which never moved measures
+    // exactly zero however low the camera is and whatever was pressed on.
+    const gestureX = this.launchGround.x - this.pressGround.x
+    const gestureZ = this.launchGround.z - this.pressGround.z
 
-    if (dragLength < THROW_MIN_DRAG) {
+    if (Math.hypot(gestureX, gestureZ) < THROW_MIN_DRAG) {
       return false
     }
+
+    // The launch's height asks how far the die has to fly, which is the ground
+    // between where it is thrown from and where it is going — the target
+    // rather than the press. Measured across the ground rather than along the
+    // line, because the line is never shorter than the height it is being used
+    // to set.
+    const dragX = this.launchGround.x - this.targetPoint.x
+    const dragZ = this.launchGround.z - this.targetPoint.z
+
+    // Held at the shortest throw rather than allowed to fall below it. While
+    // the dead zone was measured on this figure it could never be shorter, and
+    // the two are separate now: a hand that has moved its 1.2 can still end up
+    // beside what it pressed on, because the press sits ahead of the hand by
+    // the parallax and dragging back toward the camera spends that gap before
+    // it opens a throw. Left alone the launch collapses to the target's own
+    // height and the die is set down where it was pointed rather than thrown
+    // at it. Every gesture that threw before this floor existed measured over
+    // it anyway, so nothing that worked is touched.
+    const dragLength = Math.max(Math.hypot(dragX, dragZ), THROW_MIN_DRAG)
 
     this.liftLaunch(this.targetPoint.y + dragLength * Math.tan(THROW_DESCENT_ANGLE))
 

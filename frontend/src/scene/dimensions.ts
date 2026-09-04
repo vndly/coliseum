@@ -17,6 +17,16 @@ export const BOWL_INTERIOR_FLOOR_RADIUS = 4.1 // Flat part of the inside base
 export const BOWL_INTERIOR_FLOOR_HEIGHT = 0.53 // Inside base, above the table
 export const BOWL_RIM_RADIUS = 5.25 // Widest point, at the outside of the bead
 export const BOWL_RIM_HEIGHT = 4.2 // Top of the bead, above the table
+
+/**
+ * The narrowest part of the way in: the bead's inside edge, where the rolled
+ * top meets the inside wall. Nothing above it is narrower, so a body falling
+ * straight down inside this radius reaches the bowl rather than the bead.
+ *
+ * It mirrors the inside edge of the rim bead in the profile `dish.ts` revolves,
+ * which still carries its own literals — move both together.
+ */
+export const BOWL_MOUTH_RADIUS = 4.89
 export const BOWL_RADIAL_SEGMENTS = 128 // Divisions around the axis of revolution
 export const BOWL_PROFILE_DIVISIONS = 24 // Samples per curved segment of the profile
 
@@ -469,7 +479,20 @@ export const FELT_DEPTH = 20
 // Throw
 // ============================================
 
-export const THROW_MIN_DRAG = 1.2 // Dead zone: a bare click throws nothing at all
+/**
+ * The least the hand has to move across the table for a gesture to be a throw
+ * at all, so that a bare click throws nothing.
+ *
+ * Measured between the table under the press and the table under the release,
+ * both read the same way. The obvious alternative — the ground between where
+ * the die is thrown from and where it is going — is not the same figure and
+ * cannot serve here: the press is projected onto whatever it actually hit,
+ * which stands above the table, and the same ray carries on past it, so a hand
+ * that never moved still measures a parallax that grows with the height of
+ * what was pressed on and with how far the camera is tilted down. That figure
+ * is still what sets the launch's height, where it is the right one.
+ */
+export const THROW_MIN_DRAG = 1.2
 
 /**
  * How high the die is launched from, as an angle over the length of the drag.
@@ -636,17 +659,22 @@ export const DROP_DOUBLE_PRESS_TIME = 400 // Milliseconds
 export const DROP_DOUBLE_PRESS_SLOP = 12 // Pixels
 
 /**
- * How far from the bowl's axis a drop may be aimed.
+ * How far from the bowl's axis a die may be let go above.
  *
- * The flat part of the inside base, less the die's own width so that the whole
- * body is over the floor and not just the point at its centre — the same reach
- * the opening die is placed within. A drop aimed past it is refused rather
- * than pulled back in: a drag that runs long still describes the throw the
- * hand meant and is clamped to the furthest one it can make, but a drop lands
- * where it was pointed and nowhere else, so a drop pointed outside the bowl is
- * a gesture with no throw in it at all.
+ * The mouth rather than the floor, because a drop is released above the bead
+ * and falls straight down: what it has to clear is the way in, not the part of
+ * the base it would have had to land on. Less the die's own half-diagonal, so
+ * it is the whole body that passes the bead whatever attitude it was drawn in
+ * and not just the point at its centre.
+ *
+ * A press outside this is refused rather than pulled back in — a drag that
+ * runs long still describes the throw the hand meant, but a drop lands where
+ * it was pointed and nowhere else, so a drop pointed outside the bowl is a
+ * gesture with no throw in it. A press inside it always drops: what is pulled
+ * in there is the cloud, not the aim, and only when the cloud is wide enough
+ * to hang a die of itself over the bead.
  */
-export const DROP_MAX_RADIUS = BOWL_INTERIOR_FLOOR_RADIUS - DIE_SIZE
+export const DROP_MAX_RADIUS = BOWL_MOUTH_RADIUS - DIE_SIZE * Math.sqrt(3) / 2
 
 /**
  * How far above the table the lowest die of a drop begins.
