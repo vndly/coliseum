@@ -3,7 +3,6 @@
 ## TODO
 
 - Allow to throw a die with a double click
-- Configure the inital amount of dice per player
 - Tournament
   - Points
     - 1 point per win
