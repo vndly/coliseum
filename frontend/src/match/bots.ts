@@ -1,5 +1,5 @@
 import type {MatchPlayer, MatchState} from '@/match/match_state'
-import {poolSize} from '@/match/rules'
+import {FLUSH_FACES, poolSize} from '@/match/rules'
 import {DIE_SKINS} from '@/scene/die_skins'
 
 /**
@@ -39,34 +39,11 @@ const BOT_NAMES = [
  */
 const BOT_UID_PREFIX = 'bot-'
 
-/**
- * The smallest bowl worth throwing another die into.
- *
- * A bowl at rest holds nothing but distinct values from one to five: every six
- * has been taken out of the match and every group has gone back to a hand, so
- * four dice is the most one can hold and a fifth would be a flush. That makes
- * one throw exactly countable. With B dice in the bowl, the die comes up a six
- * and leaves the match (one chance in six), matches one already there and
- * brings the pair back (B in six), completes a flush and brings the whole bowl
- * back (only at four, one in six), or settles in beside the others (the rest).
- * In dice to the hand that is -0.67 at one, -0.33 at two, level at three and
- * +1.17 at four.
- *
- * Three is where it stops losing, and it is worth taking rather than merely
- * even: a die that settles walks the bowl up to four, where the next throw is
- * strongly in the thrower's favour and the turn is still theirs to take it.
- */
-const THROW_AGAIN_BOWL = 3
+/** How many ways one die can land, and so the denominator of every count below. */
+const DIE_FACES = 6
 
-/**
- * The bowl a bot will risk its last die on.
- *
- * Throwing the last die in hand is not an ordinary throw: a hand of nothing,
- * once the throw is judged, is elimination and there is no way back off it. So
- * the only bowl worth it is the one where five outcomes in six pay — the full
- * four, where anything but a six comes back doubled or brings the flush.
- */
-const LAST_DIE_BOWL = 4
+/** How many of those take the die out of the match rather than into the bowl. */
+const REMOVING_FACES = 1
 
 /** What a bot does with a turn it is already part way through. */
 export type BotMove = 'throw' | 'pass'
@@ -144,8 +121,92 @@ export function nextBotMove(state: MatchState, uid: string): BotMove {
     return 'throw'
   }
 
-  const bowl = state.bowl.length
-  const worthwhile = hand === 1 ? LAST_DIE_BOWL : THROW_AGAIN_BOWL
+  const paying = payingFaces(state)
 
-  return bowl >= worthwhile ? 'throw' : 'pass'
+  // A hand of one is not an ordinary throw: a hand of nothing, once the throw
+  // is judged, is elimination and there is no way back off it. So the last die
+  // is risked only on a bowl where every face but the six pays, rather than on
+  // one that merely pays on average.
+  if (hand === 1) {
+    const pays = paying.completing + paying.flushing
+
+    return pays >= DIE_FACES - REMOVING_FACES ? 'throw' : 'pass'
+  }
+
+  // Level is taken rather than declined: a die that settles instead walks the
+  // bowl nearer a group, where the next throw is in the thrower's favour and
+  // the turn is still theirs to take it.
+  return throwValue(paying, state.groupSize) >= 0 ? 'throw' : 'pass'
+}
+
+/** The faces of the die about to be thrown that would bring dice back. */
+interface PayingFaces {
+  completing: number // Values the bowl holds one short of a group
+  flushing: number // The value missing from a flush, when the bowl is one off one
+}
+
+/**
+ * How many of a die's six faces would bring dice back to the hand that threw it.
+ *
+ * Two ways that happens, and they can never be the same face: a value the bowl
+ * already holds one short of a group completes it, and — only when the bowl is
+ * one die short of a flush, with no value repeated in it — the one value
+ * missing from it brings the whole bowl back.
+ * @param state - The match as it currently stands
+ * @returns The paying faces, counted apart because the two pay different amounts
+ */
+function payingFaces(state: MatchState): PayingFaces {
+  const counts = new Map<number, number>()
+
+  for (const die of state.bowl) {
+    counts.set(die.face, (counts.get(die.face) ?? 0) + 1)
+  }
+
+  let completing = 0
+
+  for (const count of counts.values()) {
+    if (count === state.groupSize - 1) {
+      completing++
+    }
+  }
+
+  // A flush is the whole bowl holding one of every value a die keeps, so the
+  // throw before one goes into a bowl of four with no value repeated in it
+  const flushing = state.bowl.length === FLUSH_FACES.length - 1
+    && counts.size === state.bowl.length
+
+  return {
+    completing: completing,
+    flushing: flushing ? 1 : 0,
+  }
+}
+
+/**
+ * What one more throw is worth to the hand making it, in dice.
+ *
+ * One throw is exactly countable, because the bowl in front of it is: every six
+ * has left the match and every group has gone back to a hand, so no value sits
+ * in the bowl having already made one. Of the six faces the die can land on,
+ * one takes it out of the match, some number of them complete a group and bring
+ * it back whole, one may complete a flush and bring the entire bowl back, and
+ * the rest leave the die in the bowl — which costs the hand that die just as
+ * surely, until somebody wins it.
+ *
+ * At a group of two that is -0.67 against a bowl of one, -0.33 against two,
+ * level against three and +1.17 against four. At a group of three the bowl is
+ * larger and a group pays more, and the throw comes level once two values are
+ * sitting doubled in it.
+ * @param paying - The faces of the throw that would bring dice back
+ * @param groupSize - How many dice of one value this match counts as a group
+ * @returns The dice the throw is expected to gain, which is negative when it loses
+ */
+function throwValue(paying: PayingFaces, groupSize: number): number {
+  const settling = DIE_FACES - REMOVING_FACES - paying.completing - paying.flushing
+
+  // A group pays its whole size for the one die thrown, and a flush the whole
+  // bowl it completes; every other face costs the hand the die it threw
+  const gained = paying.completing * (groupSize - 1)
+    + paying.flushing * (FLUSH_FACES.length - 1)
+
+  return (gained - REMOVING_FACES - settling) / DIE_FACES
 }

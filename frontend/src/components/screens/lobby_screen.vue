@@ -18,10 +18,20 @@ import {watchPlayerId} from '@/match/firebase'
 import {MatchClient} from '@/match/match_client'
 import {watchOpenMatches} from '@/match/open_matches'
 import type {OpenMatch} from '@/match/open_matches'
-import {MAX_PLAYERS, MIN_PLAYERS} from '@/match/rules'
+import {DEFAULT_GROUP_SIZE, GROUP_SIZES, MAX_PLAYERS, MIN_PLAYERS} from '@/match/rules'
 import {BONE_SKIN, dieSkin, isDieSkin} from '@/scene/die_skins'
 
 const CODE_LENGTH = 4
+
+/**
+ * The face every die in the group options is drawn on.
+ *
+ * The same one in both, and the same one across the run: what a group is made
+ * of is dice reading alike, so the only thing allowed to differ between the two
+ * options is how many of them there are.
+ */
+const GROUP_FACE = 5
+
 const NAME_LIMIT = 16
 const NAME_KEY = 'coliseum.player-name' // Where the last name played under is kept
 const COLOR_KEY = 'coliseum.player-color' // And the colour played in, beside it
@@ -56,6 +66,10 @@ const playerName = ref('')
 const playerColor = ref(BONE_SKIN)
 const picking = ref(false) // Whether the colours are open under the button
 const playerCount = ref(MIN_PLAYERS)
+
+// Not remembered between matches the way the name and the colour are: those
+// are the player, and this is the match they are about to make
+const groupSize = ref(DEFAULT_GROUP_SIZE)
 const code = ref('')
 const busy = ref(false)
 const error = ref('')
@@ -308,6 +322,7 @@ async function runCreate(withBots: boolean): Promise<void> {
       trimmedName.value,
       playerColor.value,
       playerCount.value,
+      groupSize.value,
       bots,
     )
 
@@ -740,6 +755,36 @@ function onPaste(): void {
               </div>
             </div>
 
+            <!-- The rule shown rather than named. A single die reading two or
+                 three would be the face two and the face three, which is not
+                 what is being chosen: a group is dice that agree, so each
+                 option is the run of them it takes to make one. Cut into the
+                 card apart from each other, because a pair set beside a triple
+                 on an open row is one line of five dice. -->
+            <div class="field" role="group" aria-label="Groups">
+              <span class="field__label" aria-hidden="true">Groups</span>
+              <div class="groups">
+                <button
+                  v-for="size in GROUP_SIZES"
+                  :key="size"
+                  type="button"
+                  class="groups__option"
+                  :class="{'groups__option--on': groupSize === size}"
+                  :aria-pressed="groupSize === size"
+                  :aria-label="`Groups of ${size}`"
+                  :disabled="busy"
+                  @click="groupSize = size"
+                >
+                  <DieFace
+                    v-for="die in size"
+                    :key="die"
+                    :value="GROUP_FACE"
+                    :lit="groupSize === size"
+                  />
+                </button>
+              </div>
+            </div>
+
             <!-- Two ways to start the same match, side by side rather than
                  stacked: the dice above are stood to the height of the code
                  field so that swapping the halves of the card never moves this
@@ -1015,6 +1060,7 @@ function onPaste(): void {
 .picker__button:disabled,
 .palette__option:disabled,
 .counts__option:disabled,
+.groups__option:disabled,
 .paste:disabled {
     opacity: 0.45;
     cursor: not-allowed;
@@ -1202,10 +1248,12 @@ function onPaste(): void {
     stroke-linejoin: round;
 }
 
-/* Stood to the height of a code field, so that either half of the switch brings
-   the card up to the same height and the button under them does not move as
-   they are swapped. The figure is the code field's own box: 1.75rem of line
-   between 0.75rem of padding and a 1px border on each side */
+/* Stood to the height of a code field. That once held the two halves of the
+   switch to the same height; the groups below it are a second row the join
+   form has no answer to, so the card now grows when a match is being made and
+   the figure is only what keeps the dice off their own label. It is the code
+   field's own box: 1.75rem of line between 0.75rem of padding and a 1px
+   border on each side */
 .counts {
     display: flex;
     flex-wrap: wrap;
@@ -1224,6 +1272,43 @@ function onPaste(): void {
 
 .counts__option--on {
     box-shadow: 0 0 0 2px var(--brass);
+}
+
+.groups {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+/* Each run is cut into the card the way a field is, and that rim is the whole
+   reason the row reads: it is what says where one group stops and the next
+   begins. Without it a pair beside a triple is a line of five dice */
+.groups__option {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0.5rem;
+    border: 1px solid var(--brass-edge);
+    border-radius: 0.5rem;
+    background: var(--well);
+    cursor: pointer;
+    transition: border-color 160ms ease;
+}
+
+.groups__option:hover:not(:disabled) {
+    border-color: var(--brass);
+}
+
+/* The ring the seat counts are chosen by. The rim gives way to it rather than
+   sitting inside it, which would draw the tile twice */
+.groups__option--on {
+    border-color: transparent;
+    box-shadow: 0 0 0 2px var(--brass);
+}
+
+/* Smaller than the seat counts above, which is the order the two are read in:
+   how large the match is, and then what a group in it takes */
+.groups__option .die-face {
+    --size: 1.25rem;
 }
 
 /* The pair share the row evenly: neither is the afterthought, and a label as

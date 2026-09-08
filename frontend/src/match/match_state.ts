@@ -1,4 +1,4 @@
-import {MAX_PLAYERS, MIN_PLAYERS, STARTING_POOL} from '@/match/rules'
+import {DEFAULT_GROUP_SIZE, GROUP_SIZES, MAX_PLAYERS, MIN_PLAYERS, STARTING_POOL} from '@/match/rules'
 import {BONE_SKIN, isDieSkin} from '@/scene/die_skins'
 import type {DieSnapshot, ThrowLaunch, ThrowResolution, ThrownDie} from '@/scene/die_state'
 
@@ -47,6 +47,17 @@ export interface MatchPlayer {
 export interface MatchState {
   code: string
   playerCount: number
+
+  /**
+   * How many dice of one value this match counts as a group.
+   *
+   * Settled with the seats and never written again, because it is the one
+   * thing every player has to agree on without asking: each of them judges
+   * their own bowl from `rules.ts`, and a match where two of them read a
+   * different number is a match where two of them work out a different winner.
+   */
+  groupSize: number
+
   phase: MatchPhase
   players: MatchPlayer[] // Join order while the lobby fills; the order they play in once it has
 
@@ -347,6 +358,27 @@ function readSeatCount(value: unknown): number | null {
   return count >= MIN_PLAYERS && count <= MAX_PLAYERS ? count : null
 }
 
+/**
+ * Reads the size a match counts a group at.
+ *
+ * Absence is the one thing here that is answered rather than refused: matches
+ * written before the lobby offered the choice say nothing at all, and they are
+ * every one of them played at two. A field that is there and is not a size the
+ * game offers is refused like anything else, since it was written by something
+ * this game does not understand.
+ * @param value - The field as it came out of the document
+ * @returns The size, or null if the document names one that is not offered
+ */
+function readGroupSize(value: unknown): number | null {
+  if (value === undefined || value === null) {
+    return DEFAULT_GROUP_SIZE
+  }
+
+  const size = readNumber(value)
+
+  return size !== null && GROUP_SIZES.includes(size) ? size : null
+}
+
 function readDieSnapshot(value: unknown): DieSnapshot | null {
   if (!isRecord(value)) {
     return null
@@ -602,6 +634,7 @@ export function parseMatchState(code: string, value: unknown): MatchState | null
   }
 
   const playerCount = readSeatCount(value.playerCount)
+  const groupSize = readGroupSize(value.groupSize)
   const phase = readString(value.phase)
   const players = readPlayers(value.players)
   const pools = readPools(value.pools)
@@ -609,7 +642,7 @@ export function parseMatchState(code: string, value: unknown): MatchState | null
   const throwSeq = readCount(value.throwSeq)
   const bowlVersion = readCount(value.bowlVersion)
 
-  if (playerCount === null || players === null || pools === null) {
+  if (playerCount === null || groupSize === null || players === null || pools === null) {
     return null
   }
 
@@ -656,6 +689,7 @@ export function parseMatchState(code: string, value: unknown): MatchState | null
   return {
     code: code,
     playerCount: playerCount,
+    groupSize: groupSize,
     phase: phase,
     players: players,
     pools: pools,

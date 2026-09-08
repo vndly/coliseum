@@ -49,8 +49,21 @@ export const MAX_PLAYERS = 6
 /** The face that takes a die out of the match instead of into a group. */
 const REMOVED_FACE = 6
 
-/** The fewest dice showing the same value that count as a group. */
-const GROUP_SIZE = 2
+/**
+ * The sizes a group may be played at, and the one a match is played at unless
+ * it says otherwise.
+ *
+ * Chosen once in the lobby and stored on the match rather than fixed here,
+ * because every player judges their own bowl from the same rules: a table
+ * where two of them disagree about what a group is is a table where two of
+ * them disagree about who won.
+ */
+export const GROUP_SIZES: number[] = [
+  2,
+  3,
+]
+
+export const DEFAULT_GROUP_SIZE = 2
 
 /**
  * The values a flush is made of: one of each and nothing else in the bowl.
@@ -59,7 +72,7 @@ const GROUP_SIZE = 2
  * holding one of each is holding as many different values as it can, and the
  * whole of it goes back to the hand that completed it.
  */
-const FLUSH_FACES = [
+export const FLUSH_FACES = [
   1,
   2,
   3,
@@ -268,7 +281,7 @@ export function resolveThrow(
   }
 
   const flushed = flushDice(standing)
-  const returned = flushed.length > 0 ? flushed : groupedDice(standing)
+  const returned = flushed.length > 0 ? flushed : groupedDice(standing, state.groupSize)
   const bowl = standing.filter((die) => !returned.includes(die.id))
 
   const pools: Record<string, number[]> = {
@@ -359,15 +372,17 @@ function flushDice(dice: DieSnapshot[]): string[] {
 }
 
 /**
- * Every die sharing its value with at least one other.
+ * Every die sharing its value with enough others to make a group.
  *
  * All the groups, not the largest one: three twos and two fives beside them are
- * five dice going back to the same hand. The bowl is small enough that counting
- * it twice is cheaper than anything cleverer would be to read.
+ * five dice going back to the same hand at a group size of two. The bowl is
+ * small enough that counting it twice is cheaper than anything cleverer would
+ * be to read.
  * @param dice - The bowl, with the sixes already taken out of it
+ * @param groupSize - How many dice of one value the match counts as a group
  * @returns The identifiers of every die in a group
  */
-function groupedDice(dice: DieSnapshot[]): string[] {
+function groupedDice(dice: DieSnapshot[], groupSize: number): string[] {
   const counts = new Map<number, number>()
 
   for (const die of dice) {
@@ -377,7 +392,7 @@ function groupedDice(dice: DieSnapshot[]): string[] {
   const grouped: string[] = []
 
   for (const die of dice) {
-    if ((counts.get(die.face) ?? 0) >= GROUP_SIZE) {
+    if ((counts.get(die.face) ?? 0) >= groupSize) {
       grouped.push(die.id)
     }
   }
