@@ -149,9 +149,9 @@ interface PayingFaces {
  * How many of a die's six faces would bring dice back to the hand that threw it.
  *
  * Two ways that happens, and they can never be the same face: a value the bowl
- * already holds one short of a group completes it, and — only when the bowl is
- * one die short of a flush, with no value repeated in it — the one value
- * missing from it brings the whole bowl back.
+ * already holds one short of a group completes it, and — only in a match that
+ * plays the flush, and only when the bowl is one die short of one with no value
+ * repeated in it — the one value missing from it brings the whole bowl back.
  * @param state - The match as it currently stands
  * @returns The paying faces, counted apart because the two pay different amounts
  */
@@ -171,8 +171,11 @@ function payingFaces(state: MatchState): PayingFaces {
   }
 
   // A flush is the whole bowl holding one of every value a die keeps, so the
-  // throw before one goes into a bowl of four with no value repeated in it
-  const flushing = state.bowl.length === FLUSH_FACES.length - 1
+  // throw before one goes into a bowl of four with no value repeated in it.
+  // A match that does not play it never pays for one, and its bowl goes a die
+  // further than a flush would ever have let it.
+  const flushing = state.flush
+    && state.bowl.length === FLUSH_FACES.length - 1
     && counts.size === state.bowl.length
 
   return {
@@ -195,7 +198,9 @@ function payingFaces(state: MatchState): PayingFaces {
  * At a group of two that is -0.67 against a bowl of one, -0.33 against two,
  * level against three and +1.17 against four. At a group of three the bowl is
  * larger and a group pays more, and the throw comes level once two values are
- * sitting doubled in it.
+ * sitting doubled in it. Without the flush the same count holds and the bowl
+ * simply goes one die further: five distinct values pay +0.67, since the only
+ * face left that does not is the six.
  * @param paying - The faces of the throw that would bring dice back
  * @param groupSize - How many dice of one value this match counts as a group
  * @returns The dice the throw is expected to gain, which is negative when it loses

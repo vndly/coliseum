@@ -58,6 +58,16 @@ export interface MatchState {
    */
   groupSize: number
 
+  /**
+   * Whether this match plays the flush.
+   *
+   * Settled with the seats beside the group size, and for the same reason: it
+   * changes what a bowl comes to, so every player has to be reading the same
+   * answer. Turned off, nothing but a group or a run of sixes ever empties the
+   * bowl, and the all-in turns that follow an empty one grow rare with it.
+   */
+  flush: boolean
+
   phase: MatchPhase
   players: MatchPlayer[] // Join order while the lobby fills; the order they play in once it has
 
@@ -690,6 +700,13 @@ export function parseMatchState(code: string, value: unknown): MatchState | null
     code: code,
     playerCount: playerCount,
     groupSize: groupSize,
+
+    // Read the way every other flag in a match is, and not refused: a boolean
+    // is what the document says or what it does not say. The default is the
+    // other way round from the rest of them, because every match written
+    // before the lobby offered the choice played the flush.
+    flush: value.flush !== false,
+
     phase: phase,
     players: players,
     pools: pools,

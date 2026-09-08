@@ -141,7 +141,8 @@ export function drawFromHand(
  *
  * The bowl empties when a group or a flush is taken out of it — a flush always,
  * since it is the whole bowl — and the player who arrives to an empty one goes
- * all in. Judged on the turn having begun rather than on the bowl alone: a
+ * all in. A match that does not play the flush empties it that much more
+ * rarely, and its all-in turns are rarer with it. Judged on the turn having begun rather than on the bowl alone: a
  * player who throws again into a bowl the sixes emptied is part way through a
  * turn, and throws one die like anybody else.
  * @param state - The match as it currently stands
@@ -252,7 +253,8 @@ export function survivingPlayer(
  * The flush and the groups are asked in turn but can never both answer: five
  * different values are five dice with nothing shared between them. Either way
  * what comes back is dice going to the thrower's hand, and everything after
- * this reads them the same.
+ * this reads them the same. A match may be played without the flush at all, in
+ * which case only the second of the two is ever asked.
  *
  * The dice that missed the bowl need no part in this. A die that reached the
  * table left play where it landed and is already absent from the bowl handed
@@ -280,7 +282,10 @@ export function resolveThrow(
     }
   }
 
-  const flushed = flushDice(standing)
+  // Asked only of a match that plays it. Turned off, the bowl a flush would
+  // have emptied goes on filling, and the groups below are the whole of what
+  // ever takes a die back out of it.
+  const flushed = state.flush ? flushDice(standing) : []
   const returned = flushed.length > 0 ? flushed : groupedDice(standing, state.groupSize)
   const bowl = standing.filter((die) => !returned.includes(die.id))
 

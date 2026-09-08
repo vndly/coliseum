@@ -82,6 +82,7 @@ export class MatchClient {
    * @param color - The colour this player's own dice are painted in
    * @param playerCount - How many seats the match has, including this one
    * @param groupSize - How many dice of one value this match counts as a group
+   * @param flush - Whether this match plays the flush
    * @param bots - The seats nobody is sitting behind, or none for a match between people
    * @returns The code the match can be joined by
    */
@@ -90,6 +91,7 @@ export class MatchClient {
     color: number,
     playerCount: number,
     groupSize: number,
+    flush: boolean,
     bots: MatchPlayer[],
   ): Promise<string> {
     const playerId = await currentPlayerId()
@@ -126,6 +128,7 @@ export class MatchClient {
         transaction.set(reference, {
           playerCount: playerCount,
           groupSize: groupSize,
+          flush: flush,
           phase: started ? 'playing' : 'lobby',
           players: started ? shuffledPlayers(seats) : seats,
           pools: pools,

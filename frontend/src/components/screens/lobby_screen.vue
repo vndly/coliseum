@@ -70,6 +70,10 @@ const playerCount = ref(MIN_PLAYERS)
 // Not remembered between matches the way the name and the colour are: those
 // are the player, and this is the match they are about to make
 const groupSize = ref(DEFAULT_GROUP_SIZE)
+
+// On unless it is turned off, which is the game as it was before the lobby
+// offered the choice
+const flush = ref(true)
 const code = ref('')
 const busy = ref(false)
 const error = ref('')
@@ -323,6 +327,7 @@ async function runCreate(withBots: boolean): Promise<void> {
       playerColor.value,
       playerCount.value,
       groupSize.value,
+      flush.value,
       bots,
     )
 
@@ -755,33 +760,65 @@ function onPaste(): void {
               </div>
             </div>
 
-            <!-- The rule shown rather than named. A single die reading two or
-                 three would be the face two and the face three, which is not
-                 what is being chosen: a group is dice that agree, so each
-                 option is the run of them it takes to make one. Cut into the
-                 card apart from each other, because a pair set beside a triple
-                 on an open row is one line of five dice. -->
-            <div class="field" role="group" aria-label="Groups">
-              <span class="field__label" aria-hidden="true">Groups</span>
-              <div class="groups">
-                <button
-                  v-for="size in GROUP_SIZES"
-                  :key="size"
-                  type="button"
-                  class="groups__option"
-                  :class="{'groups__option--on': groupSize === size}"
-                  :aria-pressed="groupSize === size"
-                  :aria-label="`Groups of ${size}`"
-                  :disabled="busy"
-                  @click="groupSize = size"
-                >
-                  <DieFace
-                    v-for="die in size"
-                    :key="die"
-                    :value="GROUP_FACE"
-                    :lit="groupSize === size"
-                  />
-                </button>
+            <!-- The two rules on one row, and each answered in its own way.
+                 A group is dice that agree, so it is shown: a single die
+                 reading two or three would be the face two and the face three,
+                 not two dice and three. The flush has no such picture — what
+                 is being switched off is a hand, and a hand nobody plays
+                 cannot be drawn — so it is named on the same switch the card
+                 above uses to choose between creating and joining. -->
+            <div class="rules">
+              <div class="field" role="group" aria-label="Groups">
+                <span class="field__label" aria-hidden="true">Groups</span>
+
+                <!-- Cut into the card apart from each other, because a pair set
+                     beside a triple on an open row is one line of five dice -->
+                <div class="groups">
+                  <button
+                    v-for="size in GROUP_SIZES"
+                    :key="size"
+                    type="button"
+                    class="groups__option"
+                    :class="{'groups__option--on': groupSize === size}"
+                    :aria-pressed="groupSize === size"
+                    :aria-label="`Groups of ${size}`"
+                    :disabled="busy"
+                    @click="groupSize = size"
+                  >
+                    <DieFace
+                      v-for="die in size"
+                      :key="die"
+                      :value="GROUP_FACE"
+                      :lit="groupSize === size"
+                    />
+                  </button>
+                </div>
+              </div>
+
+              <div class="field field--flush" role="group" aria-label="Flush">
+                <span class="field__label" aria-hidden="true">Flush</span>
+                <div class="switch">
+                  <button
+                    type="button"
+                    class="switch__option"
+                    :class="{'switch__option--on': flush}"
+                    :aria-pressed="flush"
+                    :disabled="busy"
+                    @click="flush = true"
+                  >
+                    On
+                  </button>
+                  <button
+                    type="button"
+                    class="switch__option"
+                    :class="{'switch__option--on': !flush}"
+                    :aria-pressed="!flush"
+                    :disabled="busy"
+                    @click="flush = false"
+                  >
+                    Off
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -1249,11 +1286,11 @@ function onPaste(): void {
 }
 
 /* Stood to the height of a code field. That once held the two halves of the
-   switch to the same height; the groups below it are a second row the join
-   form has no answer to, so the card now grows when a match is being made and
-   the figure is only what keeps the dice off their own label. It is the code
-   field's own box: 1.75rem of line between 0.75rem of padding and a 1px
-   border on each side */
+   switch to the same height; the rules below it are a row the join form has no
+   answer to, so the card now grows when a match is being made and the figure
+   is only what keeps the dice off their own label. It is the code field's own
+   box: 1.75rem of line between 0.75rem of padding and a 1px border on each
+   side */
 .counts {
     display: flex;
     flex-wrap: wrap;
@@ -1274,15 +1311,35 @@ function onPaste(): void {
     box-shadow: 0 0 0 2px var(--brass);
 }
 
+/* Both rules on one line: how a group is made on the left, whether the flush
+   counts on the right, against the card's own edge. They fall into a column
+   only where half a card is too narrow to hold the switch — the same place the
+   two buttons under them give up their row */
+.rules {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: flex-start;
+}
+
+/* Takes what the dice leave, so the switch finishes on the card's right edge
+   however wide the runs beside it are. The floor is the narrowest the two words
+   will sit on one line, which is what keeps the row whole on a 360px phone —
+   under that the flush drops beneath the groups rather than splitting itself */
+.field--flush {
+    flex: 1;
+    min-width: 6rem;
+}
+
 .groups {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
 }
 
-/* Each run is cut into the card the way a field is, and that rim is the whole
-   reason the row reads: it is what says where one group stops and the next
-   begins. Without it a pair beside a triple is a line of five dice */
+/* A run of dice, cut into the card the way a field is. The rim is the whole
+   reason the row reads: it says where one run stops and the next begins, and
+   without it a pair beside a triple is a line of five dice */
 .groups__option {
     display: flex;
     gap: 0.25rem;
@@ -1305,8 +1362,8 @@ function onPaste(): void {
     box-shadow: 0 0 0 2px var(--brass);
 }
 
-/* Smaller than the seat counts above, which is the order the two are read in:
-   how large the match is, and then what a group in it takes */
+/* Smaller than the seat counts above, which is the order the rows are read in:
+   how large the match is, and then what is played in it */
 .groups__option .die-face {
     --size: 1.25rem;
 }
