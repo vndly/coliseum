@@ -4,7 +4,6 @@
 
 - New rules
   - Flush
-  - Triples-only
 - Tournament
   - Points
     - 1 point per win
