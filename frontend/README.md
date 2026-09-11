@@ -12,7 +12,6 @@
 - Play by teams
 - Add hole in the bowl where dice can fall off
 
-- Rules sheet reachable from both lobby and match
 - Die skins beyond flat colours: metal, marble, wood, glass, glow
 - Bot takeover for a disconnected player instead of stranding the match
 - In-match emotes / quick chat (fixed phrases, no free text)

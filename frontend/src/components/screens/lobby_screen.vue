@@ -12,6 +12,7 @@
 import {computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch} from 'vue'
 import {useRoute, useRouter} from 'vue-router'
 import DieFace from '@/components/die_face.vue'
+import RulesSheet from '@/components/rules_sheet.vue'
 import {createBots} from '@/match/bots'
 import {isMatchCode, normaliseMatchCode} from '@/match/codes'
 import {watchPlayerId} from '@/match/firebase'
@@ -56,6 +57,7 @@ const nameField = useTemplateRef<HTMLInputElement>('nameField')
 const codeField = useTemplateRef<HTMLInputElement>('codeField')
 const picker = useTemplateRef<HTMLElement>('picker')
 const pickerButton = useTemplateRef<HTMLButtonElement>('pickerButton')
+const howButton = useTemplateRef<HTMLButtonElement>('howButton')
 
 // Neither is a ref: both are only ever the call that ends a subscription
 let stopWatchingMatches: (() => void) | null = null
@@ -65,6 +67,7 @@ const mode = ref<'create' | 'join'>('create')
 const playerName = ref('')
 const playerColor = ref(BONE_SKIN)
 const picking = ref(false) // Whether the colours are open under the button
+const showRules = ref(false) // Whether the rules are open over the whole screen
 const playerCount = ref(MIN_PLAYERS)
 
 // Not remembered between matches the way the name and the colour are: those
@@ -126,6 +129,16 @@ const formBusy = computed<boolean>(() => busy.value && seatingCode.value === '')
 
 const creatingMatch = computed<boolean>(() => formBusy.value && pressed.value === 'match')
 const startingBots = computed<boolean>(() => formBusy.value && pressed.value === 'bots')
+
+/**
+ * Whether the rules stand over the screen, as an attribute for the screen they
+ * stand over.
+ *
+ * Nothing at all rather than false, because inert is not one of the attributes
+ * Vue knows to take off an element on a false — written out as the string
+ * "false" it is every bit as inert as it is written out as anything else.
+ */
+const behindRules = computed<true | undefined>(() => showRules.value || undefined)
 
 /**
  * The name this browser last played under.
@@ -204,6 +217,22 @@ function closePalette(): void {
       pickerButton.value?.focus()
     })
   }
+}
+
+/**
+ * Puts the rules away and gives the button that opened them the keyboard back.
+ *
+ * The sheet is dropped from the page rather than hidden, so closing it destroys
+ * whatever inside it was holding focus — and focus falls to the document, where
+ * the next tab starts again from the top and nothing has said the rules closed.
+ * The same answer the palette above gives, and for the same reason.
+ */
+function closeRules(): void {
+  showRules.value = false
+
+  void nextTick(() => {
+    howButton.value?.focus()
+  })
 }
 
 /**
@@ -604,9 +633,23 @@ function onPaste(): void {
 </script>
 
 <template>
-  <main class="lobby">
+  <main class="lobby" :inert="behindRules">
     <header class="lobby__head">
       <h1 class="lobby__wordmark">Coliseum</h1>
+
+      <!-- Under the wordmark rather than inside either card, because reading
+           the rules is not part of sitting down: they are the same rules
+           whichever way in is taken, and somebody asking for them has not yet
+           chosen one. -->
+      <button
+        ref="howButton"
+        type="button"
+        class="how"
+        :disabled="busy"
+        @click="showRules = true"
+      >
+        How to play
+      </button>
     </header>
 
     <div class="lobby__cards">
@@ -905,6 +948,10 @@ function onPaste(): void {
       </section>
     </div>
   </main>
+
+  <!-- Outside the screen rather than on it, which is what lets the whole of
+       that screen go inert behind it with one attribute -->
+  <RulesSheet v-if="showRules" @close="closeRules" />
 </template>
 
 <style scoped>
@@ -948,6 +995,27 @@ function onPaste(): void {
     gap: 1rem;
     width: 100%;
     max-width: 24rem;
+}
+
+/* Cut into the ground the way a row in the list below is cut into its card:
+   the same rim, lit on hover. Quiet, because it is the one control here that
+   does not lead to a match. */
+.how {
+    margin-top: 1rem;
+    padding: 0.375rem 0.875rem;
+    border: 1px solid var(--brass-edge);
+    border-radius: 999px;
+    background: transparent;
+    font-size: 0.8125rem;
+    color: var(--bone-dim);
+    cursor: pointer;
+    transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.how:hover:not(:disabled) {
+    border-color: var(--brass);
+    background: var(--brass-glow);
+    color: var(--bone);
 }
 
 .card {
@@ -1107,6 +1175,7 @@ function onPaste(): void {
    the row below and the action button further down, and both are written after
    this rule rather than before it: each weighs exactly what this weighs, so
    nothing but the order they are read in lets them win */
+.how:disabled,
 .match:disabled,
 .switch__option:disabled,
 .field__input:disabled,

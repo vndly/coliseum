@@ -17,6 +17,7 @@ import {computed,
 import {onBeforeRouteLeave, useRoute, useRouter} from 'vue-router'
 import {MatchAudio} from '@/audio/match_audio'
 import DieFace from '@/components/die_face.vue'
+import RulesSheet from '@/components/rules_sheet.vue'
 import {nextBotMove} from '@/match/bots'
 import type {BotMove} from '@/match/bots'
 import {isMatchCode, normaliseMatchCode} from '@/match/codes'
@@ -43,6 +44,7 @@ const code = normaliseMatchCode(typeof parameter === 'string' ? parameter : '')
 
 const canvas = useTemplateRef<HTMLCanvasElement>('canvas')
 const notice = useTemplateRef<HTMLElement>('notice')
+const rulesButton = useTemplateRef<HTMLButtonElement>('rulesButton')
 
 const COPIED_MILLISECONDS = 2000 // How long the copy button holds its answer
 
@@ -120,6 +122,8 @@ const calling = ref(false) // Whether that call is up, and the table held for it
 const acknowledgedLoss = ref(false) // Whether this player has closed the notice that they are out
 const acknowledgedEnd = ref(false) // Whether this player has closed the notice naming the winner
 const showLeave = ref(false) // Whether the question about leaving the match is up
+const showRules = ref(false) // Whether the rules stand over the table
+const owedRulesFocus = ref(false) // And whether the fitting that opened them is owed the keyboard
 const unreadable = ref(false) // Whether the match itself can no longer be read
 const botDriver = ref(false) // Whether this view is the one playing the seats nobody is behind
 const copyResult = ref<'none' | 'done' | 'failed'>('none') // What the last press of copy came to
@@ -342,17 +346,26 @@ const noticeShowing = computed<boolean>(
 )
 
 /**
+ * Whether anything at all stands over the table.
+ *
+ * The rules are not a question — they are closed when they have been read, and
+ * nothing is riding on the press — but they cover the screen exactly as a card
+ * does, so everything under them is shut away exactly as it is under one.
+ */
+const overlayShowing = computed<boolean>(() => noticeShowing.value || showRules.value)
+
+/**
  * The same answer as an attribute. Nothing at all rather than false, because
  * inert is not one of the attributes Vue knows to take off an element on a
  * false — written out as the string "false" it is every bit as inert as it is
  * written out as anything else.
  */
-const behindNotice = computed<true | undefined>(() => noticeShowing.value || undefined)
+const behindOverlay = computed<true | undefined>(() => overlayShowing.value || undefined)
 
-// The audio switches stay in the table before and during play, but never sit
-// in the keyboard or pointer path while another layer owns the whole screen.
-const audioControlsInert = computed<true | undefined>(
-  () => noticeShowing.value || calling.value || undefined,
+// The fittings stay in the table before and during play, but never sit in the
+// keyboard or pointer path while another layer owns the whole screen.
+const tableControlsInert = computed<true | undefined>(
+  () => overlayShowing.value || calling.value || undefined,
 )
 
 const winnerLine = computed<string>(() => {
@@ -434,6 +447,20 @@ watch(settledTurn, (seat) => {
   }, TURN_CALL_MILLISECONDS)
 })
 
+// The keyboard owed to the rules fitting, handed over the moment the call stops
+// holding the table and the fittings come back out of their inert layer
+watch(calling, (held) => {
+  if (held || !owedRulesFocus.value) {
+    return
+  }
+
+  owedRulesFocus.value = false
+
+  void nextTick(() => {
+    rulesButton.value?.focus()
+  })
+})
+
 // A bot is given a moment before it moves. Cleared on every change rather than
 // only on a new turn: anything that takes the decision away — the player's own
 // throw landing first, the match ending — leaves a timer that would otherwise
@@ -452,11 +479,17 @@ watch(botTurnKey, (key) => {
 })
 
 // Focus is moved into a card as it opens, so that the keyboard is inside the
-// question being asked rather than left on the layer just shut behind it
+// question being asked rather than left on the layer just shut behind it. The
+// rules are put away first: they are the one layer here that was opened rather
+// than raised by the match, and a card arriving under them — the back button,
+// the last of this player's dice, the match itself ending — is a question that
+// owns the screen.
 watch(noticeShowing, (showing) => {
   if (!showing) {
     return
   }
+
+  showRules.value = false
 
   void nextTick(() => {
     notice.value?.querySelector('button')?.focus()
@@ -911,6 +944,32 @@ function onStay(): void {
   acknowledgedEnd.value = true
 }
 
+/**
+ * Puts the rules away and gives the fitting that opened them the keyboard back.
+ *
+ * The sheet is dropped from the page rather than hidden, so closing it destroys
+ * whatever inside it was holding focus, and focus falls to the document — where
+ * the next tab starts again from the top and nothing has said the rules closed.
+ *
+ * Not always at once. A turn called while the rules were open holds the whole
+ * table for the length of the call, fittings included, and focus handed to an
+ * element inside an inert one is focus dropped on the floor. So it is owed
+ * rather than given, and the watcher above pays it when the call lets go.
+ */
+function closeRules(): void {
+  showRules.value = false
+
+  if (calling.value) {
+    owedRulesFocus.value = true
+
+    return
+  }
+
+  void nextTick(() => {
+    rulesButton.value?.focus()
+  })
+}
+
 function onCancelLeave(): void {
   showLeave.value = false
 }
@@ -1268,52 +1327,66 @@ onBeforeUnmount(() => {
       @contextmenu.prevent
     />
 
-    <!-- Two direct switches rather than a settings drawer: sound is adjusted
-         in the moment, and neither choice is buried behind another press. -->
-    <div
-      v-if="!unreadable"
-      class="audio-controls"
-      role="group"
-      aria-label="Audio"
-      :inert="audioControlsInert"
-    >
-      <button
-        type="button"
-        class="audio-toggle"
-        :class="{'audio-toggle--off': !musicEnabled}"
-        aria-label="Background music"
-        :aria-pressed="musicEnabled"
-        :title="musicEnabled ? 'Turn music off' : 'Turn music on'"
-        @pointerdown.stop
-        @keydown.stop
-        @click="onToggleMusic"
-      >
-        <svg class="audio-toggle__icon" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M9 17V5l10-2v12" />
-          <circle cx="6.5" cy="17.5" r="2.5" />
-          <circle cx="16.5" cy="15.5" r="2.5" />
-          <path v-if="!musicEnabled" class="audio-toggle__slash" d="M4 4l16 16" />
-        </svg>
-      </button>
+    <!-- Direct switches rather than a settings drawer: sound is adjusted in the
+         moment, and neither choice is buried behind another press. The rules
+         are set apart from the pair in a fitting of their own, because what
+         they do is not something about the table being altered. -->
+    <div v-if="!unreadable" class="table-controls" :inert="tableControlsInert">
+      <div class="fitting" role="group" aria-label="Audio">
+        <button
+          type="button"
+          class="fitting__button"
+          :class="{'fitting__button--off': !musicEnabled}"
+          aria-label="Background music"
+          :aria-pressed="musicEnabled"
+          :title="musicEnabled ? 'Turn music off' : 'Turn music on'"
+          @pointerdown.stop
+          @keydown.stop
+          @click="onToggleMusic"
+        >
+          <svg class="fitting__icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9 17V5l10-2v12" />
+            <circle cx="6.5" cy="17.5" r="2.5" />
+            <circle cx="16.5" cy="15.5" r="2.5" />
+            <path v-if="!musicEnabled" class="fitting__slash" d="M4 4l16 16" />
+          </svg>
+        </button>
 
-      <button
-        type="button"
-        class="audio-toggle"
-        :class="{'audio-toggle--off': !effectsEnabled}"
-        aria-label="Sound effects"
-        :aria-pressed="effectsEnabled"
-        :title="effectsEnabled ? 'Turn sound effects off' : 'Turn sound effects on'"
-        @click="onToggleEffects"
-      >
-        <svg class="audio-toggle__icon" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M4 9h4l5-4v14l-5-4H4z" />
-          <template v-if="effectsEnabled">
-            <path d="M16 9.5a4 4 0 0 1 0 5" />
-            <path d="M18.5 6.5a8 8 0 0 1 0 11" />
-          </template>
-          <path v-else class="audio-toggle__slash" d="M4 4l16 16" />
-        </svg>
-      </button>
+        <button
+          type="button"
+          class="fitting__button"
+          :class="{'fitting__button--off': !effectsEnabled}"
+          aria-label="Sound effects"
+          :aria-pressed="effectsEnabled"
+          :title="effectsEnabled ? 'Turn sound effects off' : 'Turn sound effects on'"
+          @click="onToggleEffects"
+        >
+          <svg class="fitting__icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 9h4l5-4v14l-5-4H4z" />
+            <template v-if="effectsEnabled">
+              <path d="M16 9.5a4 4 0 0 1 0 5" />
+              <path d="M18.5 6.5a8 8 0 0 1 0 11" />
+            </template>
+            <path v-else class="fitting__slash" d="M4 4l16 16" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="fitting">
+        <button
+          ref="rulesButton"
+          type="button"
+          class="fitting__button"
+          aria-label="How to play"
+          title="How to play"
+          @click="showRules = true"
+        >
+          <svg class="fitting__icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M8.6 9.4a3.4 3.4 0 1 1 3.4 3.4v1.7" />
+            <circle cx="12" cy="17.9" r="0.9" fill="currentColor" stroke="none" />
+          </svg>
+        </button>
+      </div>
     </div>
 
     <!-- Mounted from the first frame and merely covered while the seats fill,
@@ -1322,7 +1395,7 @@ onBeforeUnmount(() => {
          Hidden rather than dropped while the question about leaving is up: it
          is the wait that decides which chrome exists, and the two scrims over
          one another only muddy the card that is being answered. -->
-    <div v-if="showWaiting" v-show="!showLeave" :inert="behindNotice" class="waiting">
+    <div v-if="showWaiting" v-show="!showLeave" :inert="behindOverlay" class="waiting">
       <div class="waiting__card">
         <p class="label">Match code</p>
 
@@ -1363,7 +1436,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div v-else-if="!unreadable" :inert="behindNotice" class="chrome">
+    <div v-else-if="!unreadable" :inert="behindOverlay" class="chrome">
       <header class="chrome__top">
         <ul class="rail">
           <li
@@ -1533,6 +1606,12 @@ onBeforeUnmount(() => {
     </div>
 
     <p v-if="error && !unreadable" class="error" role="alert">{{ error }}</p>
+
+    <!-- Last, over every layer the match raises for itself. It is the one
+         thing on this screen a player opened rather than was shown, and the
+         watcher above takes it away again the moment the match has something
+         to ask. -->
+    <RulesSheet v-if="showRules" @close="closeRules" />
   </main>
 </template>
 
@@ -1555,14 +1634,33 @@ onBeforeUnmount(() => {
     touch-action: none;
 }
 
-/* Set into one small fitting at the table's empty upper-left corner. The two
-   wells read as hardware belonging to the table rather than floating app
-   chrome, and leave the upper-right to the players it already names. */
-.audio-controls {
+/* Set into the table's empty upper-left corner, where the wells read as
+   hardware belonging to the table rather than as floating app chrome, and leave
+   the upper-right to the players the rail already names.
+
+   Two fittings rather than one run of three: the pair on the left alter the
+   table, and the one beside them does not. */
+.table-controls {
     position: absolute;
     z-index: 1;
     top: calc(1.25rem + env(safe-area-inset-top, 0px));
     left: calc(1.25rem + env(safe-area-inset-left, 0px));
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+}
+
+/* What the fittings take their room from is the rail across the top, and set
+   side by side under this they leave it a column one pill wide. Stacked, they
+   hand the top of the table back the width they had before the rules joined
+   them, and spend the empty corner underneath instead. */
+@media (width < 28rem) {
+    .table-controls {
+        flex-direction: column;
+    }
+}
+
+.fitting {
     display: flex;
     gap: 0.25rem;
     padding: 0.25rem;
@@ -1574,7 +1672,7 @@ onBeforeUnmount(() => {
         0 0.5rem 1.25rem rgb(0 0 0 / 24%);
 }
 
-.audio-toggle {
+.fitting__button {
     display: grid;
     width: 2.75rem;
     height: 2.75rem;
@@ -1588,16 +1686,18 @@ onBeforeUnmount(() => {
     transition: background 160ms ease, color 160ms ease;
 }
 
-.audio-toggle:hover {
+.fitting__button:hover {
     background: rgb(200 164 104 / 20%);
 }
 
-.audio-toggle--off {
+/* A switch that has been turned off. Nothing here but the two audio ones can
+   be, so the state belongs to the button rather than to either of them. */
+.fitting__button--off {
     background: transparent;
     color: var(--bone-faint);
 }
 
-.audio-toggle__icon {
+.fitting__icon {
     width: 1.25rem;
     height: 1.25rem;
     overflow: visible;
@@ -1608,7 +1708,7 @@ onBeforeUnmount(() => {
     stroke-linejoin: round;
 }
 
-.audio-toggle__slash {
+.fitting__slash {
     color: var(--ember);
     stroke-width: 2;
 }
@@ -1757,12 +1857,22 @@ onBeforeUnmount(() => {
     pointer-events: none;
 }
 
+/* Held off the fittings in the corner opposite. The figure is the width of the
+   two of them side by side, which is what the rail has to start clear of —
+   narrower than that they are stacked, and the rail only has to clear the one
+   on top. */
 .chrome__top {
     display: flex;
     align-items: flex-start;
     justify-content: flex-end;
     gap: 1rem;
-    padding-left: calc(6.5rem + env(safe-area-inset-left, 0px));
+    padding-left: calc(10.75rem + env(safe-area-inset-left, 0px));
+}
+
+@media (width < 28rem) {
+    .chrome__top {
+        padding-left: calc(6.5rem + env(safe-area-inset-left, 0px));
+    }
 }
 
 .rail {
