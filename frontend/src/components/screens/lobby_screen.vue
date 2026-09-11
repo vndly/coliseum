@@ -797,10 +797,10 @@ function onPaste(): void {
 
               <div class="field field--flush" role="group" aria-label="Flush">
                 <span class="field__label" aria-hidden="true">Flush</span>
-                <div class="switch">
+                <div class="switch switch--flush">
                   <button
                     type="button"
-                    class="switch__option"
+                    class="switch__option switch__option--brass"
                     :class="{'switch__option--on': flush}"
                     :aria-pressed="flush"
                     :disabled="busy"
@@ -1075,6 +1075,22 @@ function onPaste(): void {
 .switch__option--on {
     background: var(--walnut);
     color: var(--bone);
+}
+
+/* The flush is the only rule on the card that can be turned off, so the word
+   that says it is on is said in the brass everything else lit here is said in.
+   Only the word: the surface under it stays the walnut the rule above gives
+   every lit option, which the second class here outweighs for colour alone */
+.switch__option--brass.switch__option--on {
+    color: var(--brass);
+}
+
+/* Two words of two and three letters, where the switch above carries sentences.
+   Stamped rather than written, the way every other short word on this screen is.
+   Untracked, unlike those: the letters the flush field's floor was measured
+   against are these, and gapping them would put the pair over it */
+.switch--flush .switch__option {
+    text-transform: uppercase;
 }
 
 .form {
