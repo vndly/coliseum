@@ -90,8 +90,8 @@ onBeforeUnmount(() => {
       </p>
 
       <p class="sheet__line">
-        In your turn, throw a die into the bowl.
-        If you start from an empty bowl you must throw all your dice.
+        On your turn, throw a die into the bowl.
+        If you start from an empty bowl, you must throw all your dice.
         Once you have thrown, you can throw again or pass.
       </p>
 
