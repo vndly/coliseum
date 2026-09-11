@@ -636,20 +636,6 @@ function onPaste(): void {
   <main class="lobby" :inert="behindRules">
     <header class="lobby__head">
       <h1 class="lobby__wordmark">Coliseum</h1>
-
-      <!-- Under the wordmark rather than inside either card, because reading
-           the rules is not part of sitting down: they are the same rules
-           whichever way in is taken, and somebody asking for them has not yet
-           chosen one. -->
-      <button
-        ref="howButton"
-        type="button"
-        class="how"
-        :disabled="busy"
-        @click="showRules = true"
-      >
-        How to play
-      </button>
     </header>
 
     <div class="lobby__cards">
@@ -946,6 +932,20 @@ function onPaste(): void {
           <p v-if="error" class="error" role="alert">{{ error }}</p>
         </form>
       </section>
+
+      <!-- Under both ways in rather than over them, because reading the rules
+           is not part of sitting down. It is the same sheet whichever way in is
+           taken, and somebody who wants it will look for it; somebody who does
+           not should not have to read past it to type their name. -->
+      <button
+        ref="howButton"
+        type="button"
+        class="how"
+        :disabled="busy"
+        @click="showRules = true"
+      >
+        How to play
+      </button>
     </div>
   </main>
 
@@ -997,25 +997,25 @@ function onPaste(): void {
     max-width: 24rem;
 }
 
-/* Cut into the ground the way a row in the list below is cut into its card:
-   the same rim, lit on hover. Quiet, because it is the one control here that
-   does not lead to a match. */
+/* The one control on the screen with no rim and no surface: everything above
+   it is somewhere to sit down, and this is a footnote to the lot of them. Set
+   in the stack rather than beside it, so it is cut to the same width and falls
+   under whichever card was last — and half a card's gap further down, since it
+   belongs to neither. */
 .how {
-    margin-top: 1rem;
-    padding: 0.375rem 0.875rem;
-    border: 1px solid var(--brass-edge);
-    border-radius: 999px;
+    align-self: center;
+    margin-top: 0.5rem;
+    padding: 0.375rem 0.5rem;
+    border: 0;
     background: transparent;
     font-size: 0.8125rem;
     color: var(--bone-dim);
     cursor: pointer;
-    transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+    transition: color 160ms ease;
 }
 
 .how:hover:not(:disabled) {
-    border-color: var(--brass);
-    background: var(--brass-glow);
-    color: var(--bone);
+    color: var(--brass);
 }
 
 .card {

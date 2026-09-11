@@ -187,6 +187,18 @@ export class ThrowController {
   }
 
   /**
+   * Whether a throw is being aimed right now.
+   *
+   * Asked by the screen rather than by anything in here, and for one reason:
+   * Escape cancels an aim, and the screen has its own answer to Escape. A press
+   * that abandons a drag must not also be the press that asks about leaving the
+   * match.
+   */
+  get isAiming(): boolean {
+    return this.activePointer !== null
+  }
+
+  /**
    * How many dice the next gesture puts in the air. One on an ordinary turn,
    * and the player's whole hand on a turn that begins with an empty bowl.
    *

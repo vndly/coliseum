@@ -1197,6 +1197,45 @@ async function holdScreenAwake(): Promise<void> {
 }
 
 /**
+ * Answers Escape with the same question the back button is answered with.
+ *
+ * Bound on the window, because the match is a canvas and a scrim: there is
+ * usually nothing focused for the press to travel up from. Four things get it
+ * first, and each of them is already an answer to the same press — the rules
+ * sheet, which closes on it; a card that is already asking something; an aim
+ * mid-drag, which `ThrowController` abandons on it; and a call, which holds the
+ * whole table and is answered by nobody.
+ *
+ * Bound in the capture phase, which is what makes two of those four true. The
+ * controller's own listener is on the window as well and is added first, in the
+ * scene's constructor, so on the way up it would have cancelled the aim this
+ * asks about before it could be asked — the guard would read an aim that had
+ * just stopped existing and open the card anyway. And the music switch stops
+ * every keydown it is given, to keep the press that works it from spending the
+ * gesture the autoplay retry is waiting on; on the way up that would swallow
+ * this press on one of three neighbouring controls and no other. Capture is
+ * ahead of both. What it costs is that nothing below can take Escape by
+ * stopping it any more — a control that wants it has to be named in the guards
+ * above instead.
+ *
+ * A finished or unreadable match is left alone for the same reason the back
+ * button leaves it alone: there is nothing to walk out of, and the card on
+ * screen already leads to the lobby.
+ * @param event - The key pressed, wherever it landed
+ */
+function onKeyDown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || showRules.value || noticeShowing.value || calling.value) {
+    return
+  }
+
+  if (finished.value || unreadable.value || scene?.isAiming === true) {
+    return
+  }
+
+  showLeave.value = true
+}
+
+/**
  * Asks for the lock again once the page is being looked at again.
  *
  * The browser gives no lock to a page nobody can see and takes back the one it
@@ -1283,6 +1322,7 @@ onMounted(() => {
   claimBotSeats()
 
   document.addEventListener('visibilitychange', onVisibilityChange)
+  window.addEventListener('keydown', onKeyDown, true)
   void holdScreenAwake()
 })
 
@@ -1306,6 +1346,8 @@ onBeforeUnmount(() => {
   // screen awake, and everything above it matters more than whether this
   // browser's own release call comes back.
   document.removeEventListener('visibilitychange', onVisibilityChange)
+  // The phase has to match the one it was added in, or the listener is left behind
+  window.removeEventListener('keydown', onKeyDown, true)
 
   // Handed back rather than left to the page, since a match is left far more
   // often than the tab it was open in is closed

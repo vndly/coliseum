@@ -260,6 +260,11 @@ export class DishScene {
     this.throwController.throwUnaimed(count)
   }
 
+  /** Whether a throw is being aimed, which is what Escape cancels before anything else. */
+  get isAiming(): boolean {
+    return this.throwController.isAiming
+  }
+
   /** How many dice are in the bowl, which is what DIE_LIMIT is measured against. */
   get dieCount(): number {
     return this.dice.count

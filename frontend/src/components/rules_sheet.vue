@@ -1,11 +1,15 @@
 <!-- The rules of the game, over whatever was on the screen.
 
      The same sheet in the lobby and in a match, which is the whole reason it
-     reads nothing off either. A match settles how large a group is and whether
-     the flush is played, and a sheet that named this match's answer would be a
-     different sheet in each of the two places it is opened from — so the two
-     rules that vary are named as choices a match is made with, and everything
-     else is the game.
+     reads nothing off either. A match settles how large a group is, and a sheet
+     that named this match's answer would be a different sheet in each of the
+     two places it is opened from — so the one rule that varies is named as a
+     choice a match is made with, and everything else is the game.
+
+     The flush is left out altogether rather than named the same way. It is the
+     one rule a match can turn off entirely, and the three steps below are the
+     whole of what somebody has to know to take a turn; a hand that turns up
+     once in a long evening is a fourth step standing in the way of the three.
 
      Prose rather than anything derived from `rules.ts`: nothing here is a
      figure the code owns, so nothing here is imported. What that costs is that
@@ -32,13 +36,6 @@ const closeButton = useTemplateRef<HTMLButtonElement>('closeButton')
  * the answer to a question this sheet has deliberately not asked.
  */
 const REMOVED_RUN = [6]
-const FLUSH_RUN = [
-  1,
-  2,
-  3,
-  4,
-  5,
-]
 const GROUP_RUN = [
   3,
   3,
@@ -93,8 +90,9 @@ onBeforeUnmount(() => {
       </p>
 
       <p class="sheet__line">
-        Throw one die into the bowl. Arrive at an empty bowl and you throw your
-        whole hand instead. Once you have thrown, throw again or pass.
+        In your turn, throw one die into the bowl. Arrive at an empty bowl and
+        you throw your whole hand instead. Once you have thrown, throw again or
+        pass.
       </p>
 
       <p class="label">When the dice stop</p>
@@ -105,16 +103,6 @@ onBeforeUnmount(() => {
             <DieFace v-for="(face, index) in REMOVED_RUN" :key="index" :value="face" lit />
           </span>
           <span class="steps__line">Every six leaves the match for good.</span>
-        </li>
-
-        <li class="steps__step">
-          <span class="steps__dice">
-            <DieFace v-for="(face, index) in FLUSH_RUN" :key="index" :value="face" lit />
-          </span>
-          <span class="steps__line">
-            One of each of the other five values and nothing else is a flush, and
-            the whole bowl goes to your hand. Some matches are played without it.
-          </span>
         </li>
 
         <li class="steps__step">
@@ -214,15 +202,22 @@ onBeforeUnmount(() => {
     color: var(--brass);
 }
 
+/* Justified, with the hyphenation that has to come with it: a column this
+   narrow has few enough words a line that stretching the spaces alone opens
+   rivers down the page, and breaking the long words is what closes them. The
+   document declares `lang="en"`, which is what gives the browser a dictionary
+   to break them by. */
 .sheet__line {
     margin-top: 0.875rem;
     font-size: 0.9375rem;
     line-height: 1.5;
+    text-align: justify;
+    hyphens: auto;
     color: var(--bone-dim);
 }
 
 /* What the dice have just done is a paragraph about the game rather than a
-   fifth step, so it is held off the list the way the list is held off the
+   fourth step, so it is held off the list the way the list is held off the
    prose above it */
 .steps + .sheet__line {
     margin-top: 1.5rem;
@@ -237,8 +232,8 @@ onBeforeUnmount(() => {
 }
 
 /* Two columns, and the dice are the left one: every run starts on the same
-   line so the four of them read down the sheet as one column of dice. The
-   subgrid is what holds that column to the widest run — the flush, at five —
+   line so the three of them read down the sheet as one column of dice. The
+   subgrid is what holds that column to the widest run — the group, at three —
    without a width being written down and kept in step by hand. */
 .steps {
     display: grid;
@@ -257,7 +252,7 @@ onBeforeUnmount(() => {
 
 /* Packed against the text rather than away from it, so a run of one is beside
    the line it is about instead of stranded at the far side of a gutter the
-   flush is the only step wide enough to fill.
+   group is the only step wide enough to fill.
 
    Set down on the first line of that text rather than on the box that holds it:
    a die is shorter than a line of type, and centred on one it reads as having
@@ -278,12 +273,14 @@ onBeforeUnmount(() => {
 .steps__line {
     font-size: 0.9375rem;
     line-height: 1.5;
+    text-align: justify;
+    hyphens: auto;
     color: var(--bone);
 }
 
 /* Narrower than the two columns need, the dice stand over the line they belong
    to instead of squeezing it to three words apiece */
-@media (width < 26rem) {
+@media (width < 22rem) {
     .steps,
     .steps__step {
         display: flex;
