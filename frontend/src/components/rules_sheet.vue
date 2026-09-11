@@ -85,24 +85,24 @@ onBeforeUnmount(() => {
       <h2 id="rules-heading" class="sheet__title">How to play</h2>
 
       <p class="sheet__line">
-        Everyone starts with six dice in the colour they chose. Run out and you
-        are out — the last player still holding dice wins.
+        Everyone starts with six dice. Run out of dice and you
+        are out. The last player still holding dice wins.
       </p>
 
       <p class="sheet__line">
-        In your turn, throw one die into the bowl. Arrive at an empty bowl and
-        you throw your whole hand instead. Once you have thrown, throw again or
-        pass.
+        In your turn, throw a die into the bowl.
+        If you start from an empty bowl you must throw all your dice.
+        Once you have thrown, you can throw again or pass.
       </p>
 
-      <p class="label">When the dice stop</p>
+      <p class="label">When all dice stop</p>
 
       <ol class="steps">
         <li class="steps__step">
           <span class="steps__dice">
             <DieFace v-for="(face, index) in REMOVED_RUN" :key="index" :value="face" lit />
           </span>
-          <span class="steps__line">Every six leaves the match for good.</span>
+          <span class="steps__line">Every six is removed from the game</span>
         </li>
 
         <li class="steps__step">
@@ -110,8 +110,7 @@ onBeforeUnmount(() => {
             <DieFace v-for="(face, index) in GROUP_RUN" :key="index" :value="face" lit />
           </span>
           <span class="steps__line">
-            Dice of one value — two of them, or three, depending on how the match
-            was made — go to your hand and end your turn.
+            Take all groups of dice of the same value
           </span>
         </li>
 
@@ -120,16 +119,10 @@ onBeforeUnmount(() => {
             <DieFace v-for="(face, index) in KEPT_RUN" :key="index" :value="face" />
           </span>
           <span class="steps__line">
-            Anything else stays in the bowl for whoever groups it next.
+            Anything else stays in the bowl
           </span>
         </li>
       </ol>
-
-      <p class="sheet__line">
-        A die that misses the bowl leaves the match. A die in the bowl belongs to
-        nobody until somebody groups it, and it keeps the colour of whoever threw
-        it.
-      </p>
 
       <button
         ref="closeButton"
