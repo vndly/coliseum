@@ -2123,7 +2123,7 @@ onBeforeUnmount(() => {
          because the corner above carries a figure the rail has to hold clear of.
 
          The glyphs are laid out in a tray that slides out of it, and nothing
-         about them is named in words — eight pictures in a well, the way the
+         about them is named in words — six pictures in a well, the way the
          lobby lays its sixteen dice out in one. -->
     <div v-if="atTable" class="emote-controls" :inert="behindOverlay">
       <div ref="emotePicker" class="emote">
@@ -2841,13 +2841,13 @@ onBeforeUnmount(() => {
 
 /* A tray of glyphs drawn out of the fitting, cut from the same walnut and brass
    and carrying the same pair of shadows. Squarer than the pill it comes out of,
-   because eight things laid four by two is a tray and not a switch. */
+   because six things laid three by two is a tray and not a switch. */
 .emote__set {
     position: absolute;
     right: 0;
     bottom: calc(100% + 0.5rem);
     display: grid;
-    grid-template-columns: repeat(4, auto);
+    grid-template-columns: repeat(3, auto);
     gap: 0.25rem;
     padding: 0.375rem;
     border: 1px solid var(--brass-edge);

@@ -15,7 +15,7 @@ export interface Emote {
 }
 
 /**
- * The eight, in the order the picker lays them out: four across, two down.
+ * The six, in the order the picker lays them out: three across, two down.
  *
  * One per thing a player might want to say, and deliberately no two that
  * overlap — a table given two ways to say that a throw went badly uses them
@@ -24,9 +24,14 @@ export interface Emote {
  * four players, and one of them has gone quiet.
  *
  * The order is part of the stored shape rather than a presentation detail. An
- * emote travels as its position here, so an entry may be added to the end and
- * none may ever be reordered — an emote already in flight would arrive meaning
- * something else.
+ * emote travels as its position here, so an entry added to the end costs
+ * nothing, while a cut renumbers every entry below it and an emote already in
+ * flight arrives meaning something else. The set was cut from eight to six and
+ * renumbered once, knowingly, and what that cost is bounded: an emote is only
+ * ever read live — the slots a player finds waiting when they join are counted
+ * and not shown — so the whole of the damage is a wrong glyph for three seconds
+ * on a tab left open across the deploy, and it heals the moment that tab
+ * reloads. It is not worth paying twice. From here an entry goes on the end.
  */
 export const EMOTES: Emote[] = [
   {
@@ -38,6 +43,10 @@ export const EMOTES: Emote[] = [
     name: 'Ha',
   },
   {
+    glyph: '😭',
+    name: 'Ruined',
+  },
+  {
     glyph: '👏',
     name: 'Nice',
   },
@@ -46,40 +55,27 @@ export const EMOTES: Emote[] = [
     name: 'On fire',
   },
   {
-    glyph: '💀',
-    name: 'Brutal',
-  },
-  {
-    glyph: '😭',
-    name: 'Ruined',
-  },
-  {
-    glyph: '🙏',
-    name: 'Please',
-  },
-  {
-    glyph: '⏳',
+    glyph: '🕓',
     name: 'Hurry up',
   },
 ]
 
 /**
  * The emotes by name, for the code that chooses one instead of offering all
- * eight.
+ * six.
  *
- * Positions in the list above, written out beside it rather than looked up, and
- * the second reason nothing in that list may ever be reordered — the first being
- * the emotes already in flight.
+ * Positions in the list above, written out beside it rather than looked up, so
+ * every one of them has to be counted again by hand whenever that list changes.
+ * That is the second reason to leave its order alone, the first being the emotes
+ * already in flight.
  */
 export const EMOTE = {
   whoa: 0,
   ha: 1,
-  nice: 2,
-  onFire: 3,
-  brutal: 4,
-  ruined: 5,
-  please: 6,
-  hurry: 7,
+  ruined: 2,
+  nice: 3,
+  onFire: 4,
+  hurry: 5,
 } as const
 
 /** The emote a set that has lost its footing falls back to. */

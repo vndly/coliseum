@@ -217,12 +217,12 @@ export function nextBotEmote(
 
   // Somebody has just thrown their last die away
   if (!mine && poolSize(state, thrower) === 0) {
-    return chance(BOT_EMOTE_ODDS.elimination) ? EMOTE.brutal : null
+    return chance(BOT_EMOTE_ODDS.elimination) ? EMOTE.whoa : null
   }
 
   // The same reading of the same hand, one die earlier, about its own
   if (mine && poolSize(state, bot) === 1) {
-    return chance(BOT_EMOTE_ODDS.lastDie) ? EMOTE.please : null
+    return chance(BOT_EMOTE_ODDS.lastDie) ? EMOTE.ruined : null
   }
 
   const kind = returnedDiceKind(resolution)
