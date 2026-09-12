@@ -6,18 +6,20 @@ import {collection,
   query,
   runTransaction,
   serverTimestamp,
+  setDoc,
   updateDoc} from 'firebase/firestore'
 import type {DocumentReference, Unsubscribe} from 'firebase/firestore'
 import {createMatchCode} from '@/match/codes'
 import {currentPlayerId, firestore} from '@/match/firebase'
-import {parseMatchState, parseThrowRecord} from '@/match/match_state'
-import type {MatchPlayer, MatchState, ThrowRecord} from '@/match/match_state'
+import {parseEmoteRecord, parseMatchState, parseThrowRecord} from '@/match/match_state'
+import type {EmoteRecord, MatchPlayer, MatchState, ThrowRecord} from '@/match/match_state'
 import {nextActivePlayer, resolveThrow, shuffledPlayers, startingHand} from '@/match/rules'
 import {createOpeningDie} from '@/scene/die_state'
 import type {DieSnapshot, ThrownDie} from '@/scene/die_state'
 
 const MATCHES = 'matches'
 const THROWS = 'throws'
+const EMOTES = 'emotes'
 const CODE_ATTEMPTS = 8 // Before giving up on finding a code nobody is using
 
 /**
@@ -41,6 +43,7 @@ export class MatchClient {
   private readonly unsubscribers: Unsubscribe[] = []
   private appliedThrow = 0 // The last throw handed to the scene, by sequence number
   private primed = false // Whether the throws already in the match have been skipped past
+  private primedEmotes = false // And whether the emotes already in it have been, which is separate
 
   private constructor(code: string, playerId: string) {
     this.code = code
@@ -291,12 +294,14 @@ export class MatchClient {
    * absence in the match.
    * @param onState - Given the match every time it changes, and whether the server confirmed it
    * @param onThrow - Given another player's throw, once, as it is made
+   * @param onEmote - Given another player's emote, once, as it is sent
    * @param onLost - Given why the match itself can no longer be read
    * @param onSnag - Given why the throws beneath it stopped arriving, which the match survives
    */
   listen(
     onState: (state: MatchState, confirmed: boolean) => void,
     onThrow: (record: ThrowRecord) => void,
+    onEmote: (record: EmoteRecord) => void,
     onLost: (reason: unknown) => void,
     onSnag: (reason: unknown) => void,
   ): void {
@@ -362,6 +367,48 @@ export class MatchClient {
         this.primed = true
       }
     }, onSnag))
+
+    // Every slot at once, unordered and unlimited, because there is nothing here
+    // to order or to limit: one document per player, overwritten rather than
+    // added to, so the collection is never larger than the table.
+    this.unsubscribers.push(onSnapshot(collection(this.reference, EMOTES), (snapshot) => {
+      for (const change of snapshot.docChanges()) {
+        if (change.type === 'removed') {
+          continue
+        }
+
+        const record = parseEmoteRecord(change.doc.id, change.doc.data())
+
+        // This player's own emote is already on their own screen. It was put
+        // there the moment they pressed, so that what answers the press is the
+        // press and not the round trip.
+        if (record === null || record.uid === this.playerId) {
+          continue
+        }
+
+        if (this.primedEmotes) {
+          onEmote(record)
+        }
+      }
+
+      // Whatever the first delivery held was sent before this player was
+      // watching, so it is noted and not shown — otherwise somebody joining a
+      // match part way through arrives to every player's last emote at once, as
+      // though the whole table had just spoken. Counted only once the server has
+      // answered, for the same reason the throws above are: a cache-only first
+      // delivery can be empty while the collection already holds every slot.
+      if (!snapshot.metadata.fromCache) {
+        this.primedEmotes = true
+      }
+    }, (reason: unknown) => {
+      // Swallowed rather than answered. The match still reads, every bowl still
+      // arrives, and every turn is still playable; what is lost is the chatter
+      // around it, which is not worth pinning a line over the scene for the rest
+      // of the game — that line is never cleared. Logged, because the likeliest
+      // cause by far is a store that has never been told this collection exists,
+      // and nothing on the screen would ever say so.
+      console.error('The emotes beneath this match could not be followed.', reason)
+    }))
   }
 
   /**
@@ -532,6 +579,36 @@ export class MatchClient {
         // Read in this same transaction, so it is counted rather than incremented
         bowlVersion: state.bowlVersion + 1,
       })
+    })
+  }
+
+  /**
+   * Says something to the table.
+   *
+   * One document per player, named after them and overwritten every time, so
+   * this is the one write in the game that cannot accumulate: a match played
+   * for an hour leaves behind exactly as many emote documents as it has seats.
+   *
+   * Deliberately not a transaction and deliberately not on the match document.
+   * Nothing reads an emote but the screens showing it, nothing in the rules
+   * turns on one, and two players sending at the same moment are writing to two
+   * different documents — so there is nothing here to serialise. Kept off the
+   * match itself for the same reason the hands are kept off the seats: this is
+   * rewritten far more often than anything it would share a document with, and
+   * it would otherwise contend with the two transactions that carry the bowl.
+   *
+   * The stamp is what makes the write a change. The slot is overwritten, so
+   * sending the same emote twice running would put back a document identical to
+   * the one already there, and an unchanged document is not something a listener
+   * has to report. Nothing reads it, and nothing may — it is a client's request
+   * for a server clock, which is null in this browser's own cache until the
+   * server answers.
+   * @param emote - Which of EMOTES to say
+   */
+  async sendEmote(emote: number): Promise<void> {
+    await setDoc(doc(this.reference, EMOTES, this.playerId), {
+      emote: emote,
+      sentAt: serverTimestamp(),
     })
   }
 

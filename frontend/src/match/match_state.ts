@@ -1,3 +1,4 @@
+import {isEmote} from '@/match/emotes'
 import {DEFAULT_GROUP_SIZE, GROUP_SIZES, MAX_PLAYERS, MIN_PLAYERS, STARTING_POOL} from '@/match/rules'
 import {BONE_SKIN, isDieSkin} from '@/scene/die_skins'
 import type {DieSnapshot, ThrowLaunch, ThrowResolution, ThrownDie} from '@/scene/die_state'
@@ -143,6 +144,27 @@ export interface ThrowRecord {
   seq: number
   uid: string
   dice: ThrownDie[]
+}
+
+/**
+ * One player's last emote, as it is stored.
+ *
+ * A slot rather than a stream: every player has exactly one document, named
+ * after them and overwritten every time they send, so the collection can never
+ * grow past the seats at the table and nothing is ever left to sweep up after a
+ * match. The identifier comes off the document's own name, the way a match's
+ * code does, rather than being written into it a second time.
+ *
+ * The emote is the whole of it. The document carries a server timestamp beside
+ * it that nothing here reads, and it is not incidental: overwriting a slot with
+ * the same emote a second time would otherwise write a document identical to the
+ * one already there, and an unchanged document is not a change any listener is
+ * obliged to report. The stamp is what makes every send differ from the one
+ * before it — written and never parsed, exactly as the match's own createdAt is.
+ */
+export interface EmoteRecord {
+  uid: string
+  emote: number // Into EMOTES
 }
 
 /**
@@ -744,6 +766,36 @@ export function parseThrowRecord(value: unknown): ThrowRecord | null {
     seq: seq,
     uid: uid,
     dice: dice,
+  }
+}
+
+/**
+ * Turns a stored emote document into an emote.
+ *
+ * Refused rather than repaired, like everything else here, and refusing one
+ * costs nothing: an emote is a glyph over the table for three seconds, so a
+ * document this build cannot read is an emote nobody is shown rather than a
+ * match nobody can read. That is also what keeps an older client out of trouble
+ * once the set grows — an index it has never heard of is passed over rather than
+ * drawn as a question mark.
+ * @param uid - The document's own name, which is the player who sent it
+ * @param value - The document's fields
+ * @returns The emote, or null if there is nothing readable there
+ */
+export function parseEmoteRecord(uid: string, value: unknown): EmoteRecord | null {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const sent = readNumber(value.emote)
+
+  if (sent === null || !isEmote(sent)) {
+    return null
+  }
+
+  return {
+    uid: uid,
+    emote: sent,
   }
 }
 

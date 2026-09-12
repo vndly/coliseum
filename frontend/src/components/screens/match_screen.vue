@@ -21,8 +21,9 @@ import RulesSheet from '@/components/rules_sheet.vue'
 import {nextBotMove} from '@/match/bots'
 import type {BotMove} from '@/match/bots'
 import {isMatchCode, normaliseMatchCode} from '@/match/codes'
+import {EMOTES, emote} from '@/match/emotes'
 import {MatchClient} from '@/match/match_client'
-import type {MatchPlayer, MatchState, ThrowRecord} from '@/match/match_state'
+import type {EmoteRecord, MatchPlayer, MatchState, ThrowRecord} from '@/match/match_state'
 import {drawFromHand, nextActivePlayer, poolSize, returnedDiceKind, throwSize} from '@/match/rules'
 import {dieSkin, dieSkinCss} from '@/scene/die_skins'
 import type {ThrowLaunch} from '@/scene/die_state'
@@ -45,6 +46,8 @@ const code = normaliseMatchCode(typeof parameter === 'string' ? parameter : '')
 const canvas = useTemplateRef<HTMLCanvasElement>('canvas')
 const notice = useTemplateRef<HTMLElement>('notice')
 const rulesButton = useTemplateRef<HTMLButtonElement>('rulesButton')
+const emotePicker = useTemplateRef<HTMLElement>('emotePicker')
+const emoteButton = useTemplateRef<HTMLButtonElement>('emoteButton')
 
 const COPIED_MILLISECONDS = 2000 // How long the copy button holds its answer
 
@@ -76,6 +79,36 @@ const BOT_LOCK = 'coliseum-bots-'
 
 /** How long a turn is called for before the call fades and the table is let go. */
 const TURN_CALL_MILLISECONDS = 1000
+
+/**
+ * How long a player must wait between saying one thing and the next.
+ *
+ * Every client is trusted, so this is the interface declining to offer a second
+ * emote rather than the store refusing one — the same trade every other rule in
+ * this game is kept by. It is not kept across a reload either, and deliberately
+ * so: reloading a match costs a great deal more than five seconds, and a player
+ * who would rather spend it that way has earned the emote.
+ */
+const EMOTE_COOLDOWN_MILLISECONDS = 5000
+
+/**
+ * How long one emote stays on screen.
+ *
+ * Shorter than the wait above, which is what keeps a player to one row at a
+ * time: their last is always gone before their next can be sent, so the log
+ * never has to decide what to do about somebody talking over themselves.
+ */
+const EMOTE_ROW_MILLISECONDS = 3000
+
+/**
+ * How many emotes are shown at once.
+ *
+ * A full table reacting to one flush is six of them in the same breath — the
+ * five other seats MAX_PLAYERS allows, and this player's own — and six pills
+ * climbing the side of the screen would reach the rail and read as a fault
+ * rather than as a table talking. The newest are kept.
+ */
+const EMOTE_ROWS = 4
 
 /**
  * The face the placard draws a group with.
@@ -112,6 +145,10 @@ let takeoverAttempt = 0 // How many offers this bowl has already had
 let appliedBowlVersion: number | null = null // The last bowl handed to the scene, once one has been
 let copiedTimer = 0 // The pending reset of the copy button, so it can be called off
 let turnCallTimer = 0 // The pending end of the turn call, so it can be called off
+let emoteCooldownTimer = 0 // The pending end of the wait between emotes, so it can be called off
+let emoteRowTimer = 0 // The pending trim of the emotes on screen, so it can be called off
+let emoteSweepFrame = 0 // The frame the arc is told to start emptying on, so it can be called off
+let emoteArrival = 0 // Counts emotes shown here, which is what names one row apart from the next
 let botTimer = 0 // The pending move of the bot whose turn it is, so it can be called off
 let leaveAllowed = false // Set by every departure made here, so the guard lets those through
 let unmounted = false // Whether the screen has gone, for the connection still being opened
@@ -133,6 +170,9 @@ const acknowledgedLoss = ref(false) // Whether this player has closed the notice
 const acknowledgedEnd = ref(false) // Whether this player has closed the notice naming the winner
 const showLeave = ref(false) // Whether the question about leaving the match is up
 const showRules = ref(false) // Whether the rules stand over the table
+const picking = ref(false) // Whether the emotes are laid out over the table
+const cooling = ref(false) // Whether the wait between one emote and the next is running
+const sweeping = ref(false) // And whether the arc drawing that wait has begun emptying
 const owedRulesFocus = ref(false) // And whether the fitting that opened them is owed the keyboard
 const unreadable = ref(false) // Whether the match itself can no longer be read
 const botDriver = ref(false) // Whether this view is the one playing the seats nobody is behind
@@ -140,6 +180,25 @@ const copyResult = ref<'none' | 'done' | 'failed'>('none') // What the last pres
 const error = ref('')
 const musicEnabled = ref(matchAudio.isMusicEnabled)
 const effectsEnabled = ref(matchAudio.isEffectsEnabled)
+
+/**
+ * One emote on screen, for as long as it is on screen.
+ *
+ * The seat is read once, as the emote arrives, rather than looked up again every
+ * time the list is drawn: a seat is settled the moment the match starts, so
+ * neither the name nor the colour on a row can go out of date inside its three
+ * seconds. Keyed by arrival rather than by player, so a row leaving while
+ * another arrives is two elements and not one changing its mind.
+ */
+interface EmoteRow {
+  key: number
+  name: string
+  color: number
+  emote: number
+  expires: number // On the monotonic clock, which is what the trim below reads
+}
+
+const emoteRows = ref<EmoteRow[]>([])
 
 const activePlayer = computed<MatchPlayer | null>(() => {
   const match = state.value
@@ -231,6 +290,12 @@ const callLine = computed<string>(() => {
 // the call is already holding every pointer on the screen; this is what stops
 // the one press that layer cannot — a Pass the keyboard still has hold of.
 //
+// And closed for as long as the emotes are laid out. Nothing on that layer takes
+// a pointer it was not given, and the press that puts it away is deliberately
+// let through to whatever it was aimed at — which on the canvas is an aim, and
+// twice inside the double-press window is the whole hand dropped on the table
+// unasked. Shutting the gesture is what makes letting that press through safe.
+//
 // And closed until there is a simulation to throw into at all. A throw is
 // written to the match before the dice it names ever come to rest, and a scene
 // with no physics world never brings them to rest — the hand is charged, the
@@ -245,6 +310,7 @@ const canThrow = computed<boolean>(
     && !writing.value
     && !resolving.value
     && !calling.value
+    && !picking.value
     && judged.value
     && !bowlFull.value
     && myPool.value > 0,
@@ -373,7 +439,9 @@ const overlayShowing = computed<boolean>(() => noticeShowing.value || showRules.
 const behindOverlay = computed<true | undefined>(() => overlayShowing.value || undefined)
 
 // The fittings stay in the table before and during play, but never sit in the
-// keyboard or pointer path while another layer owns the whole screen.
+// keyboard or pointer path while another layer owns the whole screen. The same
+// answer serves the emote corner opposite: both are hardware set into the table,
+// and neither is reachable while something stands over it.
 const tableControlsInert = computed<true | undefined>(
   () => overlayShowing.value || calling.value || undefined,
 )
@@ -406,6 +474,16 @@ const winnerLine = computed<string>(() => {
 const showWaiting = computed<boolean>(
   () => !unreadable.value && inLobby.value && (state.value !== null || route.query.bots !== '1'),
 )
+
+/**
+ * Whether the table's own chrome is on screen, which is when there is something
+ * to say and somebody to say it to.
+ *
+ * The two corners the emotes live in are laid over the table rather than in the
+ * column the rail and the buttons share, so they cannot be raised by the same
+ * branch the chrome is. This is that branch, said once.
+ */
+const atTable = computed<boolean>(() => !unreadable.value && !showWaiting.value)
 
 const seatsTaken = computed<number>(() => state.value?.players.length ?? 0)
 const seatsTotal = computed<number>(() => state.value?.playerCount ?? 0)
@@ -469,6 +547,17 @@ watch(calling, (held) => {
   void nextTick(() => {
     rulesButton.value?.focus()
   })
+})
+
+// The emotes belong to the table, so they go away with it. Anything standing over
+// the match shuts this corner along with the fittings opposite, and a set of
+// glyphs left open inside an inert layer is a panel nobody can put away, over a
+// card that is asking something. Closed bare, without handing the keyboard back:
+// whatever raised the layer is owed the focus, and the watcher below gives it.
+watch(tableControlsInert, (shut) => {
+  if (shut) {
+    picking.value = false
+  }
 })
 
 // A bot is given a moment before it moves. Cleared on every change rather than
@@ -946,6 +1035,209 @@ function onToggleEffects(): void {
   effectsEnabled.value = enabled
 }
 
+/**
+ * Puts an emote on screen for its three seconds.
+ * @param seat - Who said it
+ * @param sent - Which of EMOTES they said
+ */
+function showEmote(seat: MatchPlayer, sent: number): void {
+  emoteArrival++
+
+  const row: EmoteRow = {
+    key: emoteArrival,
+    name: seat.name,
+    color: seat.color,
+    emote: sent,
+    expires: performance.now() + EMOTE_ROW_MILLISECONDS,
+  }
+
+  emoteRows.value = [
+    ...emoteRows.value,
+    row,
+  ].slice(-EMOTE_ROWS)
+
+  trimEmoteRows()
+}
+
+/**
+ * Takes off the rows whose time is up, and puts the next trim on the clock.
+ *
+ * One timer for the whole list rather than one per row. Every row is given the
+ * same length and rows are appended in the order they arrive, so the first of
+ * them is always the next to go and there is never a later one to wait on.
+ */
+function trimEmoteRows(): void {
+  const now = performance.now()
+
+  emoteRows.value = emoteRows.value.filter((row) => row.expires > now)
+
+  window.clearTimeout(emoteRowTimer)
+
+  const earliest = emoteRows.value[0]
+
+  if (earliest !== undefined) {
+    emoteRowTimer = window.setTimeout(trimEmoteRows, earliest.expires - now)
+  }
+}
+
+/**
+ * Takes somebody else's emote.
+ *
+ * Dropped outright while the page is hidden, which is the same answer the
+ * priming in the client gives and for the same reason: an emote is three
+ * seconds of somebody reacting, and somebody who was not looking has missed it
+ * rather than being owed it. What it actually buys is more than manners. A
+ * hidden page is given no animation frames, so the transition taking a row off
+ * screen never finishes and Vue leaves the element in the page — a match left
+ * open in a background tab would collect one invisible row per emote for as long
+ * as it sat there, and hand the lot of them back at once on the way in.
+ * @param record - The emote, as they sent it
+ */
+function onEmote(record: EmoteRecord): void {
+  if (document.visibilityState === 'hidden') {
+    return
+  }
+
+  const seat = state.value?.players.find((player) => player.uid === record.uid)
+
+  // An emote from nobody at this table. Nothing above this refuses a write from
+  // outside the match, and a row with no seat behind it has no name to carry and
+  // nothing anybody here would recognise.
+  if (seat === undefined) {
+    return
+  }
+
+  showEmote(seat, record.emote)
+}
+
+/**
+ * Says something to the table, and says it here at once.
+ *
+ * Shown before the write rather than after it, so that what answers the press is
+ * the press rather than the round trip. Left standing if that write is refused,
+ * which is the one place this deliberately parts company with a throw: dice no
+ * other player has are a table two people disagree about, and a glyph no other
+ * player saw is gone in three seconds either way. The refusal is still said, on
+ * the line every other refused write is said on.
+ * @param sent - Which of EMOTES to say
+ */
+function onSendEmote(sent: number): void {
+  const connected = client
+  const seat = state.value?.players.find((player) => player.uid === uid.value)
+
+  if (connected === null || seat === undefined || cooling.value) {
+    return
+  }
+
+  // Put away through the same door a press outside uses, so the keyboard that
+  // was on the glyph lands back on the button rather than on the document. That
+  // is only possible because the wait leaves the button focusable: taken off it
+  // outright, focus would be handed to a disabled element and dropped.
+  closePicker()
+
+  showEmote(seat, sent)
+  startEmoteCooldown()
+
+  connected.sendEmote(sent).catch((reason: unknown) => {
+    error.value = describe(reason)
+  })
+}
+
+/**
+ * Holds the button for five seconds and draws the wait around its own rim.
+ *
+ * The arc is painted full for a frame before it is told to empty, because a
+ * property that has never been painted at its starting value has nothing to
+ * transition from and would simply appear already empty. Waited for rather than
+ * assumed: the arc does not exist until Vue has patched the button, which is a
+ * microtask away, and a frame asked for before that would find nothing there.
+ */
+function startEmoteCooldown(): void {
+  cooling.value = true
+  sweeping.value = false
+
+  window.clearTimeout(emoteCooldownTimer)
+  emoteCooldownTimer = window.setTimeout(() => {
+    cooling.value = false
+  }, EMOTE_COOLDOWN_MILLISECONDS)
+
+  window.cancelAnimationFrame(emoteSweepFrame)
+
+  void nextTick(() => {
+    emoteSweepFrame = window.requestAnimationFrame(() => {
+      sweeping.value = true
+    })
+  })
+}
+
+/**
+ * Puts the emotes away and gives the button back whatever focus it was holding.
+ *
+ * The same answer the lobby's palette gives, and for the same reason: the set is
+ * dropped from the page rather than hidden, so closing it while a glyph is
+ * focused destroys the focused element and focus falls to the document — where
+ * the next tab starts again from the top and nothing has said the emotes closed.
+ */
+function closePicker(): void {
+  const wasInside = emotePicker.value?.contains(document.activeElement) ?? false
+
+  picking.value = false
+
+  if (wasInside) {
+    void nextTick(() => {
+      emoteButton.value?.focus()
+    })
+  }
+}
+
+/**
+ * Closes the emotes when the next press lands outside them.
+ *
+ * Bound on the window rather than on a backdrop, exactly as the lobby binds it,
+ * so the press that closes them still reaches whatever it was aimed at — a player
+ * going from the emotes straight to Pass presses it once and not twice. What that
+ * costs in the lobby is nothing, and what it would cost here is the table: a
+ * press falling through to the canvas is an aim, and two of them inside the
+ * double-press window is the whole hand dropped into the bowl unasked. Shutting
+ * the gesture for as long as these are open is what makes letting it through safe.
+ *
+ * Bound in the capture phase, which the lobby's does not have to be. The music
+ * switch stops every press it is given — `match_audio.ts` listens for one on the
+ * window to answer a browser that refused to start the music, and a press meant
+ * for the switch is not the gesture that retry is waiting on — so on the way up
+ * this would never hear the one control on screen that swallows it, and the
+ * emotes would stay open over the table with the throw gesture shut behind them.
+ * The same trap `onKeyDown` is bound ahead of, for the same switch.
+ *
+ * Ahead of the canvas rather than behind it now, which changes nothing that
+ * matters: the watcher that reopens the gesture is a pre-flush job and the whole
+ * dispatch is one task, so the press that closes these still meets a table whose
+ * gesture is shut, and is still spent rather than thrown.
+ * @param event - The press, wherever it landed
+ */
+function onPressAnywhere(event: PointerEvent): void {
+  const inside = event.target instanceof Node && emotePicker.value?.contains(event.target) === true
+
+  if (!inside) {
+    picking.value = false
+  }
+}
+
+/**
+ * Lays the emotes out, or puts them away again.
+ *
+ * Refused outright while the wait is running, rather than laid out with nothing
+ * in them that can be pressed. A tray a player can open and choose nothing from
+ * is a tray that reads as broken; the arc on the button is already saying why.
+ */
+function onToggleEmotes(): void {
+  if (cooling.value) {
+    return
+  }
+
+  picking.value = !picking.value
+}
+
 function onKeepWatching(): void {
   acknowledgedLoss.value = true
 }
@@ -1104,7 +1396,7 @@ async function connect(): Promise<void> {
 
     uid.value = opened.uid
     client = opened
-    opened.listen(onState, onThrow, onLost, onSnag)
+    opened.listen(onState, onThrow, onEmote, onLost, onSnag)
   } catch (reason: unknown) {
     error.value = describe(reason)
   }
@@ -1231,6 +1523,13 @@ async function holdScreenAwake(): Promise<void> {
  * stopping it any more — a control that wants it has to be named in the guards
  * above instead.
  *
+ * The emotes are answered here rather than deferred to, unlike those four. They
+ * are the nearest thing a player has open, so the press closes them and stops —
+ * asking about leaving the match in the same breath would answer a press nobody
+ * aimed at the match. Their own handlers cover the keyboard that is inside them;
+ * this covers the far commoner case of a set opened by a thumb, where the press
+ * has nothing to travel up from.
+ *
  * A finished or unreadable match is left alone for the same reason the back
  * button leaves it alone: there is nothing to walk out of, and the card on
  * screen already leads to the lobby.
@@ -1238,6 +1537,12 @@ async function holdScreenAwake(): Promise<void> {
  */
 function onKeyDown(event: KeyboardEvent): void {
   if (event.key !== 'Escape' || showRules.value || noticeShowing.value || calling.value) {
+    return
+  }
+
+  if (picking.value) {
+    closePicker()
+
     return
   }
 
@@ -1336,6 +1641,7 @@ onMounted(() => {
 
   document.addEventListener('visibilitychange', onVisibilityChange)
   window.addEventListener('keydown', onKeyDown, true)
+  window.addEventListener('pointerdown', onPressAnywhere, true)
   void holdScreenAwake()
 })
 
@@ -1346,6 +1652,9 @@ onBeforeUnmount(() => {
   window.clearTimeout(takeoverTimer)
   window.clearTimeout(turnCallTimer)
   window.clearTimeout(botTimer)
+  window.clearTimeout(emoteCooldownTimer)
+  window.clearTimeout(emoteRowTimer)
+  window.cancelAnimationFrame(emoteSweepFrame)
   releaseBotSeats?.()
   releaseBotSeats = null
   botDriver.value = false
@@ -1361,6 +1670,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibilityChange)
   // The phase has to match the one it was added in, or the listener is left behind
   window.removeEventListener('keydown', onKeyDown, true)
+  window.removeEventListener('pointerdown', onPressAnywhere, true)
 
   // Handed back rather than left to the page, since a match is left far more
   // often than the tab it was open in is closed
@@ -1599,6 +1909,103 @@ onBeforeUnmount(() => {
           Back to lobby
         </button>
       </footer>
+    </div>
+
+    <!-- What the table has just said, in the corner nothing else claims. A log
+         rather than a flourish: an emote is worth nothing without knowing who
+         sent it, so each one arrives on the rail's own pill, with the rail's own
+         swatch and name, at the far end of the screen from it. Newest at the
+         bottom, nearest the button that sends them.
+
+         Never pressed, so it never takes the pointer — a drag that begins over
+         one still reaches the bowl, exactly as it does over the chrome.
+
+         Before the corner below it in the page, so that a tray of glyphs being
+         chosen from cleanly covers whatever a row behind it was saying rather
+         than interleaving with it. -->
+    <TransitionGroup
+      v-if="atTable"
+      tag="ul"
+      name="said"
+      class="emote-log"
+      role="log"
+      aria-live="polite"
+    >
+      <li v-for="row in emoteRows" :key="row.key" class="emote-log__row">
+        <span
+          class="emote-log__swatch"
+          :style="{background: dieSkinCss(row.color).surface}"
+        />
+
+        <span class="emote-log__name">{{ row.name }}</span>
+
+        <span
+          class="emote-log__glyph"
+          role="img"
+          :aria-label="emote(row.emote).name"
+        >{{ emote(row.emote).glyph }}</span>
+      </li>
+    </TransitionGroup>
+
+    <!-- The corner opposite the table's own switches, and deliberately the same
+         hardware in it: one more fitting set into the same table, rather than a
+         new kind of control. It is down here because it is pressed while the
+         dice are being watched, which is what the thumb is already near, and
+         because the corner above carries a figure the rail has to hold clear of.
+
+         The glyphs are laid out in a tray that slides out of it, and nothing
+         about them is named in words — eight pictures in a well, the way the
+         lobby lays its sixteen dice out in one. -->
+    <div v-if="atTable" class="emote-controls" :inert="tableControlsInert">
+      <div ref="emotePicker" class="emote">
+        <ul v-if="picking" class="emote__set" @keydown.esc="closePicker">
+          <li v-for="(option, index) in EMOTES" :key="option.glyph">
+            <button
+              type="button"
+              class="emote__option"
+              :aria-label="option.name"
+              :title="option.name"
+              @click="onSendEmote(index)"
+            >
+              {{ option.glyph }}
+            </button>
+          </li>
+        </ul>
+
+        <div class="fitting">
+          <button
+            ref="emoteButton"
+            type="button"
+            class="fitting__button emote__button"
+            aria-label="Say something"
+            :aria-expanded="picking"
+            :title="cooling ? 'Wait a moment' : 'Say something'"
+            :aria-disabled="cooling"
+            @keydown.esc="closePicker"
+            @click="onToggleEmotes"
+          >
+            <svg class="fitting__icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-4 3.5V16h-.5A2.5 2.5 0 0 1 4 13.5v-7A2.5 2.5 0 0 1 6.5 4z"
+              />
+            </svg>
+
+            <!-- The wait, drawn around the button's own rim rather than said in
+                 words. It empties rather than fills, so what is left of the ring
+                 is what is left of the wait. -->
+            <svg v-if="cooling" class="emote__wait" viewBox="0 0 44 44" aria-hidden="true">
+              <circle
+                class="emote__arc"
+                :class="{'emote__arc--spent': sweeping}"
+                cx="22"
+                cy="22"
+                r="20.5"
+                pathLength="100"
+              />
+            </svg>
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- Whose turn it is is the one thing the table cannot say for itself: the
@@ -2198,6 +2605,254 @@ onBeforeUnmount(() => {
 .action--large {
     padding: 1rem 3rem;
     font-size: 1.5rem;
+}
+
+/* ============================================
+   Saying something
+   ============================================ */
+
+/* Set into the corner opposite the table's own switches, and built the same way:
+   a layer that passes the pointer on, with the hardware in it taking it back. The
+   table is behind all of it, and a press that lands on nothing is a press meant
+   for the bowl.
+
+   The vertical inset is the chrome's own padding rather than the safe area the
+   corner above uses, because this button stands beside the Pass button and has to
+   sit on the same line as it. The horizontal one is the safe area, since nothing
+   is beside it that way. */
+.emote-controls {
+    position: absolute;
+    z-index: 1;
+    right: calc(1.25rem + env(safe-area-inset-right, 0px));
+    bottom: 1.25rem;
+    pointer-events: none;
+}
+
+/* The glyphs hang off this rather than off the corner, so they are placed against
+   the button they came out of and not against the screen. The lobby hangs its
+   colours the same way, from the other end. */
+.emote {
+    position: relative;
+}
+
+/* Holds the wait drawn over it. Nothing else about it differs from the switches
+   opposite, which is the point of it. */
+.emote__button {
+    position: relative;
+}
+
+/* Spent rather than switched off, and the two must not read alike: the audio
+   switches go to bone when they are turned off, and this stays brass — dimmed,
+   with the arc around it saying how long for.
+
+   Said with aria-disabled rather than taken off the button outright, because the
+   press that spends it is made from inside the tray it closes: focus has to land
+   back on this button, and focus handed to a disabled element is focus dropped on
+   the floor. What refuses the press is the guard in `onToggleEmotes`. */
+.emote__button[aria-disabled='true'] {
+    color: var(--brass-edge);
+    cursor: default;
+}
+
+/* A tray of glyphs drawn out of the fitting, cut from the same walnut and brass
+   and carrying the same pair of shadows. Squarer than the pill it comes out of,
+   because eight things laid four by two is a tray and not a switch. */
+.emote__set {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 0.5rem);
+    display: grid;
+    grid-template-columns: repeat(4, auto);
+    gap: 0.25rem;
+    padding: 0.375rem;
+    border: 1px solid var(--brass-edge);
+    border-radius: 1.25rem;
+    background: rgb(18 11 6 / 78%);
+    pointer-events: auto;
+    list-style: none;
+    box-shadow:
+        inset 0 1px 0 rgb(200 164 104 / 18%),
+        0 1rem 2rem rgb(0 0 0 / 55%);
+
+    /* Drawn out of the button rather than faded in, so it reads as the tray being
+       pulled rather than as a panel arriving over the table */
+    transform-origin: bottom right;
+    animation: emotes-opened 140ms ease-out;
+}
+
+@keyframes emotes-opened {
+    from {
+        transform: scale(0.9) translateY(0.25rem);
+        opacity: 0;
+    }
+
+    to {
+        transform: scale(1) translateY(0);
+        opacity: 1;
+    }
+}
+
+/* Cut into the tray the way the lobby's fields are cut into their card: the same
+   well, the same rim on hover. What sits in it is the one thing in this interface
+   drawn in colours it did not choose, which is the whole reason everything around
+   it is walnut, brass and bone and nothing else. */
+.emote__option {
+    display: grid;
+    width: 2.5rem;
+    height: 2.5rem;
+    place-items: center;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 0.75rem;
+    background: var(--well);
+    font-size: 1.375rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: border-color 160ms ease, background 160ms ease;
+}
+
+.emote__option:hover {
+    border-color: var(--brass-edge);
+    background: var(--brass-glow);
+}
+
+/* The wait. A circle begins at three o'clock and this has to begin at twelve. */
+.emote__wait {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+    pointer-events: none;
+}
+
+.emote__arc {
+    fill: none;
+    stroke: var(--brass);
+    stroke-width: 2;
+    stroke-linecap: round;
+
+    /* pathLength normalises the circumference to a hundred, so the ring can be
+       written as a whole without the radius ever coming into it */
+    stroke-dasharray: 100;
+    stroke-dashoffset: 0;
+
+    /* The whole of EMOTE_COOLDOWN_MILLISECONDS, and the two have to agree: that
+       timer decides when the button comes back, and this decides when it looks
+       as though it has */
+    transition: stroke-dashoffset 5000ms linear;
+}
+
+.emote__arc--spent {
+    stroke-dashoffset: 100;
+}
+
+/* Held above the line the match's own errors are written on, so a refused write
+   and a table talking never stand on one another. Never pressed, so it never
+   takes the pointer: a drag that begins over a row still reaches the bowl. */
+.emote-log {
+    position: absolute;
+    z-index: 1;
+    bottom: 6.5rem;
+    left: calc(1.25rem + env(safe-area-inset-left, 0px));
+    display: flex;
+
+    /* Held clear of the tray of glyphs that opens across from it, which reaches
+       11.7rem in from the right edge — so a row stops short of that, of this
+       corner's own inset, and of a rem of slack that also covers a safe area on
+       the left. Floored, because below about a phone's width the two cannot both
+       be had and a row worth reading is worth more than the clearance: the tray
+       is opaque and drawn over the top, so what it covers there it covers
+       cleanly. Capped, because a name is not worth twenty rem of the table. */
+    max-width: min(20rem, max(11rem, calc(100vw - 14rem)));
+    flex-direction: column;
+    gap: 0.375rem;
+    pointer-events: none;
+    list-style: none;
+}
+
+/* The rail's own pill, at the other end of the screen. Deliberately the same
+   object: the rail is where a player learns to read a swatch and a name as a
+   seat, and an emote is worth nothing until it is read as coming from one. */
+.emote-log__row {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.625rem 1rem;
+    border-radius: 999px;
+    background: rgb(14 18 16 / 55%);
+}
+
+/* The rail's swatch, repeated here rather than shared, since the two corners are
+   free to drift apart and this one has no seat to be active or out */
+.emote-log__swatch {
+    width: 0.625rem;
+    height: 0.625rem;
+    flex: none;
+    border-radius: 22%;
+    box-shadow:
+        inset 0 1px 0 rgb(243 236 224 / 32%),
+        0 0 0 1px var(--brass-edge);
+}
+
+/* Truncated harder than the rail truncates, because this stands at the end of a
+   row that already carries a glyph, and because the tray of glyphs opens across
+   the screen from it */
+.emote-log__name {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 0.8125rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--bone-dim);
+}
+
+/* Large enough to read as something said rather than as a mark beside a name.
+   The one thing on this screen the interface did not choose the colour of. */
+.emote-log__glyph {
+    flex: none;
+    font-size: 1.25rem;
+    line-height: 1;
+}
+
+/* Both ends are transitions off a class rather than an animation ending at
+   nothing, so that the reduced-motion rule crushing them to an instant leaves a
+   row on screen for its three seconds instead of leaving it invisible for them —
+   the same reason the call below is built this way. */
+.said-enter-active {
+    transition: opacity 180ms ease-out, transform 180ms ease-out;
+}
+
+.said-leave-active {
+    transition: opacity 320ms ease-in;
+
+    /* Taken out of the flow as it goes, so the rows still standing close up under
+       it rather than waiting for the fade to finish */
+    position: absolute;
+}
+
+.said-enter-from {
+    opacity: 0;
+    transform: translateY(0.375rem);
+}
+
+.said-leave-to {
+    opacity: 0;
+}
+
+.said-move {
+    transition: transform 220ms ease;
+}
+
+/* The one place the reduced-motion rule has to be argued with rather than obeyed.
+   Crushed to an instant, the arc would empty in a hundredth of a second and leave
+   a button that looks live for the five seconds it is not. Held full instead, and
+   static: the wait is still said, it is simply not drawn running. */
+@media (prefers-reduced-motion: reduce) {
+    .emote__arc--spent {
+        stroke-dashoffset: 0;
+    }
 }
 
 /* ============================================
