@@ -5,23 +5,60 @@ import {Group,
   SphereGeometry,
   Vector2,
   Vector3} from 'three'
-import type {BufferGeometry, Object3D} from 'three'
+import type {BufferGeometry, Object3D, Texture} from 'three'
 import type {ColliderHandle} from '@dimforge/rapier3d-compat'
 import {RoundedBoxGeometry} from 'three/addons/geometries/RoundedBoxGeometry.js'
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js'
 import {Die} from '@/scene/die'
 import type {DieMeshes} from '@/scene/die'
 import {BONE_SKIN, DIE_SKINS} from '@/scene/die_skins'
+import type {DieSkin} from '@/scene/die_skins'
+import {carbonTexture,
+  malachiteTexture,
+  mapleTexture,
+  marbleTexture,
+  pearlFilmTexture,
+  steelBrushTexture} from '@/scene/die_textures'
 import {DIE_FACE_NORMALS} from '@/scene/die_state'
 import type {DieSnapshot, ThrowLaunch} from '@/scene/die_state'
 import type {PhysicsWorld} from '@/scene/physics_world'
-import {DIE_CLEARCOAT,
+import {DIE_CARBON_CLEARCOAT,
+  DIE_CARBON_CLEARCOAT_ROUGHNESS,
+  DIE_CARBON_ROUGHNESS,
+  DIE_CLEARCOAT,
   DIE_CLEARCOAT_ROUGHNESS,
   DIE_COLOR,
   DIE_CORNER_RADIUS,
   DIE_CORNER_SEGMENTS,
+  DIE_GLASS_COLOR,
+  DIE_GLASS_IOR,
+  DIE_GLASS_ROUGHNESS,
+  DIE_GLASS_THICKNESS,
+  DIE_GLASS_TRANSMISSION,
+  DIE_ICE_COLOR,
+  DIE_ICE_IOR,
+  DIE_ICE_ROUGHNESS,
+  DIE_ICE_THICKNESS,
+  DIE_ICE_TRANSMISSION,
   DIE_LIMIT,
+  DIE_MALACHITE_CLEARCOAT,
+  DIE_MALACHITE_CLEARCOAT_ROUGHNESS,
+  DIE_MALACHITE_ROUGHNESS,
+  DIE_MAPLE_CLEARCOAT,
+  DIE_MAPLE_CLEARCOAT_ROUGHNESS,
+  DIE_MAPLE_ROUGHNESS,
+  DIE_MARBLE_CLEARCOAT,
+  DIE_MARBLE_CLEARCOAT_ROUGHNESS,
+  DIE_MARBLE_ROUGHNESS,
   DIE_MATCHED_COLOR,
+  DIE_PEARL_CLEARCOAT,
+  DIE_PEARL_CLEARCOAT_ROUGHNESS,
+  DIE_PEARL_COLOR,
+  DIE_PEARL_FILM_THICKNESS,
+  DIE_PEARL_IRIDESCENCE,
+  DIE_PEARL_IRIDESCENCE_IOR,
+  DIE_PEARL_METALNESS,
+  DIE_PEARL_ROUGHNESS,
   DIE_PIP_COLOR,
   DIE_PIP_INSET,
   DIE_PIP_RADIUS,
@@ -29,7 +66,9 @@ import {DIE_CLEARCOAT,
   DIE_PIP_SPACING,
   DIE_REMOVED_COLOR,
   DIE_ROUGHNESS,
-  DIE_SIZE} from '@/scene/dimensions'
+  DIE_SIZE,
+  DIE_STEEL_COLOR,
+  DIE_STEEL_ROUGHNESS} from '@/scene/dimensions'
 
 /**
  * Every die in play, and the shape they are all drawn with.
@@ -41,9 +80,14 @@ import {DIE_CLEARCOAT,
  * of the game.
  *
  * One geometry is built here and shared by every die, and one pair of
- * materials per colour a die can be painted in — so a bowl full of them costs
- * a draw call each and no memory at all, however many colours are on the
+ * materials per skin a die can be made in — so a bowl full of them costs
+ * a draw call each and no memory at all, however many skins are on the
  * table.
+ *
+ * The half of the palette that is a material rather than a paint brings a
+ * generated map or two with it. Those are drawn once here as well, and are the
+ * only thing in this class that has to be released by hand beyond the
+ * materials holding them.
  */
 export class Dice {
   private readonly group: Group // All the dice, under one node
@@ -51,6 +95,7 @@ export class Dice {
   private readonly pipGeometry: BufferGeometry // All twenty-one pips, merged into one
   private readonly bodyMaterials: MeshPhysicalMaterial[] // One per skin, in palette order
   private readonly pipMaterials: MeshPhysicalMaterial[] // The same, for the pips
+  private readonly textures: Texture[] = [] // Every generated map, kept only so it can be released
   private readonly boneBody: MeshPhysicalMaterial // Skin zero again, as what an unknown skin falls to
   private readonly bonePip: MeshPhysicalMaterial
   private readonly removedMaterial: MeshPhysicalMaterial // The wash a six leaves in
@@ -72,12 +117,13 @@ export class Dice {
     )
     this.pipGeometry = Dice.buildPipGeometry()
 
-    // Polished resin against the bowl's lacquer: the same clearcoat trick, but
-    // a softer coat, so the die reads as a lighter and cheaper material than
-    // the wood it lands in rather than as another turned surface. One pair per
-    // colour, built once here: a table of six players wears at most six of
-    // them, and building them all costs less than deciding which are needed.
-    this.bodyMaterials = DIE_SKINS.map((skin) => this.buildBody(skin.body))
+    // One body per skin, built once here: a table of six players wears at most
+    // six of them, and building them all costs less than deciding which are
+    // needed. A painted die is polished resin against the bowl's lacquer — the
+    // same clearcoat trick, but a softer coat, so the die reads as a lighter
+    // and cheaper material than the wood it lands in rather than as another
+    // turned surface. The rest are whatever material they claim to be.
+    this.bodyMaterials = DIE_SKINS.map((skin) => this.buildFinish(skin))
 
     this.pipMaterials = DIE_SKINS.map((skin) => new MeshPhysicalMaterial({
       color: skin.pip,
@@ -90,7 +136,7 @@ export class Dice {
     // a material in the middle of a frame. Both fallbacks below are
     // unreachable — the arrays are the palette, mapped — and guarded rather
     // than asserted, as every other index in this project is.
-    this.boneBody = this.bodyMaterials[BONE_SKIN] ?? this.buildBody(DIE_COLOR)
+    this.boneBody = this.bodyMaterials[BONE_SKIN] ?? this.buildPaint(DIE_COLOR)
 
     this.bonePip = this.pipMaterials[BONE_SKIN] ?? new MeshPhysicalMaterial({
       color: DIE_PIP_COLOR,
@@ -100,8 +146,8 @@ export class Dice {
 
     // Shared like the rest rather than cloned per die. However many dice a
     // verdict washes, there are only ever these two colours on the table.
-    this.removedMaterial = this.buildBody(DIE_REMOVED_COLOR)
-    this.matchedMaterial = this.buildBody(DIE_MATCHED_COLOR)
+    this.removedMaterial = this.buildPaint(DIE_REMOVED_COLOR)
+    this.matchedMaterial = this.buildPaint(DIE_MATCHED_COLOR)
 
     // Dark, and the same under both washes. A wash replaces the body outright,
     // so a claret die washed to ember would otherwise keep the light pips that
@@ -380,6 +426,13 @@ export class Dice {
       material.dispose()
     }
 
+    // Disposed separately from the materials carrying them: a material's own
+    // dispose releases the material and leaves every map it was hung with
+    // uploaded
+    for (const texture of this.textures) {
+      texture.dispose()
+    }
+
     this.removedMaterial.dispose()
     this.matchedMaterial.dispose()
     this.washPipMaterial.dispose()
@@ -442,7 +495,7 @@ export class Dice {
    * @param color - The colour to build in
    * @returns The material, shared by every die drawn in it
    */
-  private buildBody(color: number): MeshPhysicalMaterial {
+  private buildPaint(color: number): MeshPhysicalMaterial {
     return new MeshPhysicalMaterial({
       color: color,
       roughness: DIE_ROUGHNESS,
@@ -450,6 +503,125 @@ export class Dice {
       clearcoat: DIE_CLEARCOAT,
       clearcoatRoughness: DIE_CLEARCOAT_ROUGHNESS,
     })
+  }
+
+  /**
+   * Builds one skin's body material, as whatever that skin is made of.
+   *
+   * The one place in the project that turns a finish into a surface, and the
+   * reason DieFinish is a union of names rather than a number: a finish added
+   * to the palette without a case here is a build failure rather than a die
+   * that quietly comes out bone.
+   *
+   * Every map a case asks for is drawn here and now. There is exactly one skin
+   * per patterned finish, so no map is ever built twice, and each is handed to
+   * keep on the way past so that the dice can release them together.
+   * @param skin - The skin to build
+   * @returns The material, shared by every die made in it
+   */
+  private buildFinish(skin: DieSkin): MeshPhysicalMaterial {
+    switch (skin.finish) {
+      case 'marble':
+        return new MeshPhysicalMaterial({
+          map: this.keep(marbleTexture()),
+          roughness: DIE_MARBLE_ROUGHNESS,
+          metalness: 0,
+          clearcoat: DIE_MARBLE_CLEARCOAT,
+          clearcoatRoughness: DIE_MARBLE_CLEARCOAT_ROUGHNESS,
+        })
+
+      case 'steel':
+
+        // The only metal on the table, so the only body that takes its colour
+        // from what it reflects rather than from a light falling on it. The
+        // brushing arrives as roughness and not as colour: a roughness map
+        // only ever multiplies the figure beside it down, so the streaks
+        // polish the steel below DIE_STEEL_ROUGHNESS and never above it.
+        return new MeshPhysicalMaterial({
+          color: DIE_STEEL_COLOR,
+          roughness: DIE_STEEL_ROUGHNESS,
+          roughnessMap: this.keep(steelBrushTexture()),
+          metalness: 1,
+        })
+
+      case 'maple':
+        return new MeshPhysicalMaterial({
+          map: this.keep(mapleTexture()),
+          roughness: DIE_MAPLE_ROUGHNESS,
+          metalness: 0,
+          clearcoat: DIE_MAPLE_CLEARCOAT,
+          clearcoatRoughness: DIE_MAPLE_CLEARCOAT_ROUGHNESS,
+        })
+
+      case 'ice':
+        return new MeshPhysicalMaterial({
+          color: DIE_ICE_COLOR,
+          roughness: DIE_ICE_ROUGHNESS,
+          metalness: 0,
+          transmission: DIE_ICE_TRANSMISSION,
+          thickness: DIE_ICE_THICKNESS,
+          ior: DIE_ICE_IOR,
+        })
+
+      case 'malachite':
+        return new MeshPhysicalMaterial({
+          map: this.keep(malachiteTexture()),
+          roughness: DIE_MALACHITE_ROUGHNESS,
+          metalness: 0,
+          clearcoat: DIE_MALACHITE_CLEARCOAT,
+          clearcoatRoughness: DIE_MALACHITE_CLEARCOAT_ROUGHNESS,
+        })
+
+      case 'glass':
+        return new MeshPhysicalMaterial({
+          color: DIE_GLASS_COLOR,
+          roughness: DIE_GLASS_ROUGHNESS,
+          metalness: 0,
+          transmission: DIE_GLASS_TRANSMISSION,
+          thickness: DIE_GLASS_THICKNESS,
+          ior: DIE_GLASS_IOR,
+        })
+
+      case 'pearl':
+
+        // The film is copied rather than handed over, so that the material
+        // cannot reach back into the palette's own figures
+        return new MeshPhysicalMaterial({
+          color: DIE_PEARL_COLOR,
+          roughness: DIE_PEARL_ROUGHNESS,
+          metalness: DIE_PEARL_METALNESS,
+          iridescence: DIE_PEARL_IRIDESCENCE,
+          iridescenceIOR: DIE_PEARL_IRIDESCENCE_IOR,
+          iridescenceThicknessRange: [...DIE_PEARL_FILM_THICKNESS],
+          iridescenceThicknessMap: this.keep(pearlFilmTexture()),
+          clearcoat: DIE_PEARL_CLEARCOAT,
+          clearcoatRoughness: DIE_PEARL_CLEARCOAT_ROUGHNESS,
+        })
+
+      case 'carbon':
+        return new MeshPhysicalMaterial({
+          map: this.keep(carbonTexture()),
+          roughness: DIE_CARBON_ROUGHNESS,
+          metalness: 0,
+          clearcoat: DIE_CARBON_CLEARCOAT,
+          clearcoatRoughness: DIE_CARBON_CLEARCOAT_ROUGHNESS,
+        })
+
+      case 'paint':
+        return this.buildPaint(skin.body)
+    }
+  }
+
+  /**
+   * Takes a generated map onto the list of maps to release, and hands it
+   * straight back so that it can be hung on a material where it stands.
+   * @param texture - The map that was just drawn
+   * @returns The same map
+   */
+  private keep(texture: Texture): Texture {
+    this.textures.push(texture)
+
+    return texture
   }
 
   /**
@@ -530,9 +702,12 @@ export class Dice {
    * Builds all twenty-one pips as a single geometry.
    *
    * A pip is a small sphere sunk into its face until only the cap shows.
-   * There are no texture maps in this project to paint one on with, and no
-   * CSG to drill one out with, and a sunken sphere is what both of those
-   * would have been imitating anyway.
+   * Nothing here paints one on — the maps the textured finishes carry are the
+   * material the body is cut from, not its markings — and there is no CSG to
+   * drill one out with either. A sunken sphere is what both of those would
+   * have been imitating anyway, and it is what keeps a pip countable on a
+   * glass die: the cap stands proud of whatever the body is doing to the
+   * light.
    * @returns The merged pip geometry, in the die's own frame
    */
   private static buildPipGeometry(): BufferGeometry {

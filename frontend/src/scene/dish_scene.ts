@@ -54,7 +54,8 @@ import {BACKGROUND_COLOR,
   MAX_FRAME_TIME,
   RESOLUTION_BEAT,
   SETTLE_MINIMUM,
-  SETTLE_TIMEOUT} from '@/scene/dimensions'
+  SETTLE_TIMEOUT,
+  TRANSMISSION_RESOLUTION_SCALE} from '@/scene/dimensions'
 
 const MAX_PIXEL_RATIO = 2 // Past this, cost climbs and nobody can see the difference
 
@@ -165,6 +166,12 @@ export class DishScene {
     // bleeds light where a large dark object meets a lighter plane — exactly
     // the bowl sitting on the felt. A generous shadow map does more good here.
     this.renderer.shadowMap.type = PCFShadowMap
+
+    // Set whether or not anything see-through is on the table. It costs
+    // nothing while there is not — the pass is only run for a die made of
+    // glass or ice — and a die that small refracts away any detail the full
+    // resolution would have carried.
+    this.renderer.transmissionResolutionScale = TRANSMISSION_RESOLUTION_SCALE
 
     this.scene = new Scene()
     this.scene.background = new Color(BACKGROUND_COLOR)

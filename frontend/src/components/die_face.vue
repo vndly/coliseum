@@ -13,13 +13,15 @@ const props = withDefaults(defineProps<{
   lit?: boolean
 
   /**
-   * A colour off the dice's own palette to paint the face in, rather than the
+   * A skin off the dice's own palette to draw the face in, rather than the
    * bone every other face here is drawn in.
    *
-   * A face given one is lit by definition: the whole reason to name a colour
-   * is to show a die in it. Both halves are taken from the palette together,
-   * because the pip colour is the half that keeps the face countable and
-   * choosing a body without it is how a die ends up unreadable.
+   * A face given one is lit by definition: the whole reason to name a skin is
+   * to show a die in it. All of it is taken from the palette together, because
+   * the pip colour is the part that keeps the face countable and choosing a
+   * body without it is how a die ends up unreadable — and because a skin that
+   * is a material rather than a paint is a whole surface, which the palette
+   * hands over as the one background that stands for it.
    */
   skin?: number | null
 }>(), {
@@ -30,7 +32,8 @@ const props = withDefaults(defineProps<{
 const painted = computed<boolean>(() => props.skin !== null)
 
 const colors = computed<{body: string,
-  pip: string} | null>(
+  pip: string,
+  surface: string} | null>(
   () => props.skin === null ? null : dieSkinCss(props.skin),
 )
 
@@ -69,6 +72,7 @@ const cells = computed<number[]>(() => {
     :class="{'die-face--lit': lit || painted}"
     :style="colors === null ? undefined : {
       '--body': colors.body,
+      '--surface': colors.surface,
       '--pip-on': colors.pip,
     }"
     aria-hidden="true"
@@ -109,14 +113,19 @@ const cells = computed<number[]>(() => {
 /* Lit reads as a die pulled out of the bowl and set down: bone, with the pips
    actually cut into it, rather than the dark blank of an unfilled seat.
 
-   The two colours are named rather than written in, so that a face given a
-   skin overrides the pair and everything below goes on reading one rule. */
+   The three are named rather than written in, so that a face given a skin
+   overrides them and everything below goes on reading one rule. The surface is
+   the whole of what the die is made of and the body the flat colour it reads
+   as, which is why the edge is drawn in the second and never the first: a
+   border cannot carry a gradient, and a marble die outlined in its own veins
+   would have no edge at all. */
 .die-face--lit {
     --body: var(--bone);
+    --surface: var(--body);
     --pip-on: var(--pip);
 
     border-color: var(--body);
-    background: var(--body);
+    background: var(--surface);
 }
 
 .die-face__pip {

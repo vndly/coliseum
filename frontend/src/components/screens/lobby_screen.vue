@@ -39,6 +39,12 @@ const COLOR_KEY = 'coliseum.player-color' // And the colour played in, beside it
 
 // Presentation order only: the numbers remain the stable skin identifiers that
 // are stored locally and sent through a match.
+//
+// Four rows of four, laid out so that no row reads as one colour: the paint is
+// set out light to dark over the first two, and the materials that follow
+// alternate a pale one with a dark one. The quarried and milled — marble,
+// malachite, steel, carbon — take the third row, and the grown and the frozen
+// take the fourth.
 const SWATCH_ORDER = [
   0,
   2,
@@ -48,6 +54,14 @@ const SWATCH_ORDER = [
   5,
   4,
   7,
+  8,
+  12,
+  9,
+  15,
+  10,
+  14,
+  11,
+  13,
 ] as const
 
 const route = useRoute()
@@ -1291,8 +1305,8 @@ function onPaste(): void {
         inset 0 1px 0 rgb(200 164 104 / 18%),
         0 1rem 2rem rgb(0 0 0 / 55%);
 
-    /* Dropped from the button rather than faded in, so it reads as the eight
-       dice being set out on the table under it */
+    /* Dropped from the button rather than faded in, so it reads as the dice
+       being set out on the table under it */
     transform-origin: top right;
     animation: palette-opened 140ms ease-out;
 }

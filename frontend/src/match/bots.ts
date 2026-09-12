@@ -1,6 +1,6 @@
 import type {MatchPlayer, MatchState} from '@/match/match_state'
 import {FLUSH_FACES, poolSize} from '@/match/rules'
-import {DIE_SKINS} from '@/scene/die_skins'
+import {PAINTED_SKINS} from '@/scene/die_skins'
 
 /**
  * The players nobody is sitting behind: how they are drawn up, and how they
@@ -57,6 +57,10 @@ export type BotMove = 'throw' | 'pass'
  * There are always enough left of each: six names and eight colours against
  * the five bots a match can seat.
  *
+ * Colours, and only colours: the draw is over the painted half of the palette,
+ * never the materials. See PAINTED_SKINS for why the half a player picks from
+ * is wider than the half a bot is dealt.
+ *
  * Colours are drawn apart here and left to collide between people, which is
  * not an inconsistency. A player chose theirs and can see what they chose;
  * nobody chose a bot's, so the only thing that can make a table of them
@@ -69,7 +73,7 @@ export type BotMove = 'throw' | 'pass'
 export function createBots(count: number, without: string, color: number): MatchPlayer[] {
   const taken = without.trim().toLowerCase()
   const undrawn = BOT_NAMES.filter((name) => name.toLowerCase() !== taken)
-  const unpainted = DIE_SKINS.map((_, skin) => skin).filter((skin) => skin !== color)
+  const unpainted = PAINTED_SKINS.filter((skin) => skin !== color)
   const bots: MatchPlayer[] = []
 
   while (bots.length < count) {

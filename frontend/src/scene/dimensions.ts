@@ -336,6 +336,162 @@ export const SETTLE_TIMEOUT = 10 // Seconds
 export const RESOLUTION_BEAT = 1.5 // Seconds
 
 // ============================================
+// Die finishes
+// ============================================
+
+/**
+ * The materials a die can be cut from, as opposed to the colours it can be
+ * painted in.
+ *
+ * A painted die is one colour and answers to DIE_ROUGHNESS and the clearcoat
+ * above it. The eight below are surfaces instead, and each one is stated here
+ * as the colours it is made of and the few numbers that make it read as that
+ * material and not another: what is polished and what is matte, what is metal,
+ * what light passes through. The patterns themselves are drawn in
+ * die_textures.ts from the frequencies stated here, so nothing in this project
+ * ships a texture file.
+ *
+ * Every one of them still answers the three questions the painted palette
+ * answers — it reads against the walnut and the baize, it stays clear of the
+ * ember and the green a verdict washes a die in, and it carries a pip colour
+ * that can be counted. That is why the marble is cool where the bone is warm,
+ * why the wood is maple rather than the walnut it would otherwise land in, and
+ * why the two see-through finishes keep dark pips: the pip caps stand proud of
+ * the surface, so they are the one part of a glass die that is never in doubt.
+ */
+
+/**
+ * The side of every generated map, in pixels.
+ *
+ * A die is about a centimetre on screen and carries one copy of the map on
+ * each of its six faces, so this is already more than the face can show. It is
+ * also the whole cost of the textured half of the palette: every map is drawn
+ * pixel by pixel on the main thread as the scene is built, and the six of them
+ * together scale with the square of this. Doubling it buys nothing anyone can
+ * see and costs four times the wait before the first frame.
+ */
+export const DIE_TEXTURE_SIZE = 128
+
+/**
+ * How much of the frame the transmission pass is rendered at.
+ *
+ * Glass and ice are drawn by sampling a second render of the scene, which
+ * costs a pass of its own whenever one of them is on the table. Halved,
+ * because what that pass is sampled through is a body a centimetre across with
+ * an index of refraction bending everything that goes through it — there is no
+ * detail in it left to lose.
+ */
+export const TRANSMISSION_RESOLUTION_SCALE = 0.5
+
+// Marble: cool white against the bone's warm, so the two are never the same
+// die seen twice, with the veins grey enough to read as stone rather than as a
+// second colour
+export const DIE_MARBLE_COLOR = 0xf3f1ec
+export const DIE_MARBLE_VEIN_COLOR = 0x87848f
+export const DIE_MARBLE_VEIN_FREQUENCY = 1.6 // Veins across a face
+export const DIE_MARBLE_VEIN_TURBULENCE = 0.45 // How far the noise drags them off straight
+export const DIE_MARBLE_VEIN_SHARPNESS = 4 // Higher leaves thinner, harder-edged veins
+export const DIE_MARBLE_ROUGHNESS = 0.3
+export const DIE_MARBLE_CLEARCOAT = 0.7 // Polished stone, a harder coat than resin
+export const DIE_MARBLE_CLEARCOAT_ROUGHNESS = 0.14
+
+// Steel: the only metal in the palette, and left neutral rather than taken to
+// brass, which at this size is amber with a highlight on it
+export const DIE_STEEL_COLOR = 0xb7bdc6
+export const DIE_STEEL_ROUGHNESS = 0.34 // The dullest the brushing leaves it; the map only polishes below
+export const DIE_STEEL_BRUSH_DEPTH = 0.45 // How far below that the deepest streaks are taken
+export const DIE_STEEL_BRUSH_LENGTH = 3 // Noise cells along a streak
+export const DIE_STEEL_BRUSH_FINENESS = 64 // And across it, which is what makes a streak a streak
+
+// Maple: pale, because a walnut die lands in a walnut bowl and is never seen
+// again
+export const DIE_MAPLE_COLOR = 0xdcb888
+export const DIE_MAPLE_GRAIN_COLOR = 0x9a6c40
+export const DIE_MAPLE_GRAIN_RINGS = 5 // Growth rings across a face
+export const DIE_MAPLE_GRAIN_WANDER = 0.35 // How far the noise bends them
+export const DIE_MAPLE_GRAIN_SHARPNESS = 3 // Higher leaves the grain as lines rather than bands
+export const DIE_MAPLE_ROUGHNESS = 0.52 // Waxed, not lacquered
+export const DIE_MAPLE_CLEARCOAT = 0.25
+export const DIE_MAPLE_CLEARCOAT_ROUGHNESS = 0.35
+
+// Ice: glass with the polish taken off it. It scatters what passes through
+// rather than carrying it, which is what keeps it apart from the glass below
+export const DIE_ICE_COLOR = 0xdaecf1
+export const DIE_ICE_ROUGHNESS = 0.42
+export const DIE_ICE_TRANSMISSION = 0.8 // Not all of it: the fifth left behind is the body's own pale
+export const DIE_ICE_THICKNESS = 0.55 // How far light is taken to travel through the body
+export const DIE_ICE_IOR = 1.4
+
+// Malachite: banded rather than veined, which is the whole reason it is here
+// beside the marble instead of being a second marble in green
+export const DIE_MALACHITE_COLOR = 0x18543c
+
+// Turned towards the sea rather than the grass, and that is the wash's doing
+// rather than the stone's: the mid green the stone is usually drawn with sits
+// within a few points of DIE_MATCHED_COLOR, and half a malachite die is band —
+// a die already wearing the colour a verdict means by "back to your hand" is a
+// die the verdict cannot speak on. Moved in hue and not in lightness, because
+// the light pips have to stay countable against it
+export const DIE_MALACHITE_BAND_COLOR = 0x5fd0c4
+export const DIE_MALACHITE_BANDS = 6 // Bands from the eye of the stone to the corner of a face
+export const DIE_MALACHITE_TURBULENCE = 0.3 // How far the noise pushes them out of round
+export const DIE_MALACHITE_ROUGHNESS = 0.22
+export const DIE_MALACHITE_CLEARCOAT = 0.85 // Cut and polished, the shiniest surface on the table
+export const DIE_MALACHITE_CLEARCOAT_ROUGHNESS = 0.1
+
+// Glass: barely tinted, because the tint is the only thing that draws the
+// body's edges against the dark wood behind it
+export const DIE_GLASS_COLOR = 0xd5e8e6
+export const DIE_GLASS_ROUGHNESS = 0.06
+export const DIE_GLASS_TRANSMISSION = 1
+export const DIE_GLASS_THICKNESS = 0.85
+export const DIE_GLASS_IOR = 1.52 // Window glass
+
+// Pearl: the one finish whose pattern is in no colour. What varies across the
+// body is the thickness of the film over it, and the colour is whatever that
+// thickness does to the light — so it moves with the die rather than sitting
+// painted on it
+export const DIE_PEARL_COLOR = 0xd9cfd6
+export const DIE_PEARL_ROUGHNESS = 0.12 // Low, or the film has no highlight to sit in
+
+// Nacre is not a metal, and this is not a claim that it is. A thin film only
+// colours the light a surface reflects, so on a body that is mostly matte
+// white there is almost nothing for it to colour and the die comes out bone.
+// Part of the way towards a specular ground is what makes the film visible at
+// all, and it is the one figure here chosen for what it looks like rather than
+// for what the material is
+export const DIE_PEARL_METALNESS = 0.35
+export const DIE_PEARL_IRIDESCENCE = 1
+
+// The film's refractive index and how thick it is, in nanometres. The range is
+// what spreads the colours across the die: a single thickness is one colour
+// everywhere, and this wide a range walks the whole film through pink, green
+// and gold as the die turns.
+export const DIE_PEARL_IRIDESCENCE_IOR = 1.3
+export const DIE_PEARL_FILM_THICKNESS: [number, number] = [
+  120,
+  700,
+]
+
+// How many turns of the film's own swirl cross a face. The thickness is
+// carried by a map rather than held at one figure: a film of even thickness is
+// one colour everywhere, which on a white body is a white die, and the whole of
+// what nacre looks like is the colour moving
+export const DIE_PEARL_FILM_SWIRL = 3
+
+export const DIE_PEARL_CLEARCOAT = 1
+export const DIE_PEARL_CLEARCOAT_ROUGHNESS = 0.08
+
+// Carbon: the weave is what makes it legible, so the tows are cut coarse. Six
+// across a face is a weave; thirty is a dark grey die
+export const DIE_CARBON_COLOR = 0x1b1e23
+export const DIE_CARBON_WEAVE_COLOR = 0x3d434c
+export const DIE_CARBON_WEAVE_TOWS = 6 // Tows across a face, each way
+export const DIE_CARBON_ROUGHNESS = 0.5
+export const DIE_CARBON_CLEARCOAT = 1 // The resin the cloth is set in
+export const DIE_CARBON_CLEARCOAT_ROUGHNESS = 0.08
+
+// ============================================
 // Physics
 // ============================================
 

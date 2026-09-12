@@ -1037,13 +1037,16 @@ function handOf(player: MatchPlayer): number {
  * holding is deliberately left to the count beside it: a hand broken out by
  * colour would tell the whole table what each player is about to throw, which
  * is a fact the game does not otherwise give away.
+ * The whole surface rather than the flat colour under it, because the rail is
+ * where the skins are told apart from one another: bone, marble, pearl and ice
+ * are four different dice and one pale dot.
  * @param player - The seat to paint
- * @returns The colour, as CSS, and the name for anything reading the rail out
+ * @returns The skin, as CSS, and the name for anything reading the rail out
  */
-function colorOf(player: MatchPlayer): {body: string,
+function colorOf(player: MatchPlayer): {surface: string,
   name: string} {
   return {
-    body: dieSkinCss(player.color).body,
+    surface: dieSkinCss(player.color).surface,
     name: dieSkin(player.color).name,
   }
 }
@@ -1492,7 +1495,7 @@ onBeforeUnmount(() => {
           >
             <span
               class="rail__swatch"
-              :style="{background: colorOf(player).body}"
+              :style="{background: colorOf(player).surface}"
               :title="colorOf(player).name"
             />
 
