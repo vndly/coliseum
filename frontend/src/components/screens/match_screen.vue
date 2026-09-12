@@ -507,9 +507,14 @@ const atTable = computed<boolean>(() => !unreadable.value && !showWaiting.value)
  * The emotes sit on that line while it is clear and are lifted off it while it
  * is not, rather than being held permanently above a band that is usually empty.
  * Three things can take it: the Pass button, the way back to the lobby once a
- * finished match has been acknowledged, and the line a refused write is said on —
- * which is centred across the whole width, so a long one reaches the corner the
- * emotes are in.
+ * finished match has been acknowledged, and the line a refused write is said on.
+ *
+ * That third one never stands on the bottom row of emotes — it is set a little
+ * higher than one, and grows upwards from there rather than down — but it does
+ * cross the second row and everything above it, which is reason enough. It is
+ * also never cleared once written, so on the narrow tables where this answer is
+ * acted on at all the emotes stay lifted for the rest of the match. That is the
+ * right way round: what is standing in the gap is the line itself.
  */
 const bottomLineTaken = computed<boolean>(
   () => error.value !== ''
@@ -2899,13 +2904,29 @@ onBeforeUnmount(() => {
     transition: bottom 200ms ease;
 }
 
-/* Lifted clear of whatever has taken that line — the centred Pass button, the
-   way back to the lobby, or the centred line a refused write is said on, any of
-   which a row would otherwise stand across on a narrow screen. Moved rather
-   than reserved for, so the corner is not held empty for the greater part of a
-   match in which none of the three is on screen. */
-.emote-log--lifted {
-    bottom: 6.5rem;
+/* Lifted clear of whichever button has taken that line, which a row would
+   otherwise stand across. Moved rather than reserved for, so the corner is not
+   held empty for the greater part of a match in which neither button is up.
+
+   And only where the two cannot both be had. Those buttons are centred and this
+   corner is not, so on a wide enough table they never meet and lifting would be
+   a gap under a row for no reason anybody looking at that corner could see. The
+   figure is where they stop meeting: the Pass button is the wider of the two at
+   9.25rem, so its left edge is half the table less 4.625rem, and a row reaches
+   this corner's own inset plus its 20rem ceiling. Those cross a little under
+   54rem, and a rem of air between them puts it here.
+
+   Taken off the buttons rather than off the line a refused write is said on,
+   which is centred text and so reaches further in than either of them. For a
+   rem or two above this figure a second row of emotes can still graze that
+   line — and only then, since it clears the bottom row at every width. Chasing
+   it would mean a figure high enough to hold the corner empty on a table wide
+   enough for nothing to be wrong with it, which is the thing this is here to
+   stop. */
+@media (width < 56rem) {
+    .emote-log--lifted {
+        bottom: 6.5rem;
+    }
 }
 
 /* The rail's own pill, at the other end of the screen. Deliberately the same
