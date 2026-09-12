@@ -124,16 +124,6 @@ const BOT_EMOTE_QUIET_MINIMUM = 12000 // Milliseconds
 const BOT_EMOTE_QUIET_MAXIMUM = 24000
 
 /**
- * The face the placard draws a group with.
- *
- * The same one the lobby's own picker is cut from, and for the same reason: a
- * group is dice that agree, so a group of two is two dice reading alike rather
- * than the face two. Which value they agree on is arbitrary, so both places
- * pick one and stay with it.
- */
-const GROUP_FACE = 5
-
-/**
  * How long a bot is left to think, at its quickest and its slowest.
  *
  * Long enough that the call naming the seat has been read and whatever the
@@ -186,6 +176,7 @@ const acknowledgedLoss = ref(false) // Whether this player has closed the notice
 const acknowledgedEnd = ref(false) // Whether this player has closed the notice naming the winner
 const showLeave = ref(false) // Whether the question about leaving the match is up
 const showRules = ref(false) // Whether the rules stand over the table
+const showConfig = ref(false) // Whether the plate naming what this table plays by is out
 const picking = ref(false) // Whether the emotes are laid out over the table
 const cooling = ref(false) // Whether the wait between one emote and the next is running
 const sweeping = ref(false) // And whether the arc drawing that wait has begun emptying
@@ -1621,7 +1612,7 @@ async function holdScreenAwake(): Promise<void> {
  * the guard would read an aim that had just stopped existing and open the card
  * anyway. And the music switch stops every keydown it is given, to keep the
  * press that works it from spending the gesture the autoplay retry is waiting
- * on; on the way up that would swallow this press on one of three neighbouring
+ * on; on the way up that would swallow this press on one of four neighbouring
  * controls and no other. Capture is ahead of both. What it costs is that
  * nothing below can take Escape by stopping it any more — a control that wants
  * it has to be named in the guards above instead.
@@ -1797,9 +1788,11 @@ onBeforeUnmount(() => {
     />
 
     <!-- Direct switches rather than a settings drawer: sound is adjusted in the
-         moment, and neither choice is buried behind another press. The rules
-         are set apart from the pair in a fitting of their own, because what
-         they do is not something about the table being altered. -->
+         moment, and neither choice is buried behind another press. The two
+         rules buttons are set apart from that pair in a fitting of their own,
+         because what they do is not something about the table being altered:
+         one says how the game is played and the other what this table plays
+         by, and a player reaches for either while the bowl sits still. -->
     <div v-if="!unreadable" class="table-controls" :inert="behindOverlay">
       <div class="table-controls__row">
         <div class="fitting" role="group" aria-label="Audio">
@@ -1842,7 +1835,7 @@ onBeforeUnmount(() => {
           </button>
         </div>
 
-        <div class="fitting">
+        <div class="fitting" role="group" aria-label="Rules">
           <button
             ref="rulesButton"
             type="button"
@@ -1856,6 +1849,26 @@ onBeforeUnmount(() => {
               <circle cx="12" cy="17.9" r="0.9" fill="currentColor" stroke="none" />
             </svg>
           </button>
+
+          <!-- Held back with the plate it opens, rather than standing over the
+               wait with nothing to answer a press with -->
+          <button
+            v-if="state !== null && !showWaiting"
+            type="button"
+            class="fitting__button"
+            aria-label="Match rules"
+            :aria-expanded="showConfig"
+            :title="showConfig ? 'Hide match rules' : 'Show match rules'"
+            @click="showConfig = !showConfig"
+          >
+            <!-- The plate itself, with its two rows stamped on it: what the
+                 button opens is what the button is drawn as. -->
+            <svg class="fitting__icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3.5" y="5.5" width="17" height="13" rx="2" />
+              <path d="M7.5 10.25h9" />
+              <path d="M7.5 13.75h5" />
+            </svg>
+          </button>
         </div>
       </div>
 
@@ -1864,32 +1877,29 @@ onBeforeUnmount(() => {
            player who joined by code has no other way of knowing whether three
            of a kind is a group or whether the flush is in.
 
-           A plate rather than a third fitting, because there is nothing here
-           to press. The rules sheet beside it stays the game rather than this
-           match, which is what lets the lobby open the same one.
+           Behind the button beside the sheet's, because it is read once and
+           then in the way — two lines that answer a question nobody asks twice,
+           standing over the corner of the table for the rest of the match. The
+           press that opened the plate puts it away again. The sheet next to it
+           stays the game rather than this match, which is what lets the lobby
+           open the same one.
 
-           Held back until the seats are full, unlike the fittings above it.
-           The card that waits for them is centred and grows with every seat,
-           so on a phone it reaches up into this corner — and the plate, which
-           is drawn over it, would stand across the match code, which is the
-           one thing that screen exists to show. -->
-      <dl v-if="state !== null && !showWaiting" class="placard">
+           A plate rather than a run of buttons, because there is nothing here
+           to press: what the button did was answer, and this is the answer.
+
+           Held back until the seats are full, along with the button that opens
+           it. The card that waits for them is centred and grows with every
+           seat, so on a phone it reaches up into this corner — and the plate,
+           which is drawn over it, would stand across the match code, which is
+           the one thing that screen exists to show. -->
+      <dl v-if="showConfig && state !== null && !showWaiting" class="placard">
         <dt class="label">Groups</dt>
 
-        <!-- Dice rather than a figure, the way every count in this interface
-             is said. Lit, because this is the answer rather than the choice. -->
-        <dd
-          class="placard__dice"
-          role="img"
-          :aria-label="`${state.groupSize} dice`"
-        >
-          <DieFace
-            v-for="die in state.groupSize"
-            :key="die"
-            :value="GROUP_FACE"
-            lit
-          />
-        </dd>
+        <!-- A figure rather than dice, the way the rail says a hand: dice drawn
+             on a plate over the table would read as dice in play. The lobby
+             draws this same number as dice because there it is the choice
+             rather than the answer. -->
+        <dd class="placard__answer">{{ state.groupSize }}</dd>
 
         <dt class="label">Flush</dt>
 
@@ -1900,7 +1910,7 @@ onBeforeUnmount(() => {
           class="placard__answer"
           :class="{'placard__answer--off': !state.flush}"
         >
-          {{ state.flush ? 'On' : 'Off' }}
+          {{ state.flush ? 'ON' : 'OFF' }}
         </dd>
       </dl>
     </div>
@@ -2267,8 +2277,8 @@ onBeforeUnmount(() => {
     pointer-events: none;
 }
 
-/* Two fittings rather than one run of three: the pair on the left alter the
-   table, and the one beside them does not. */
+/* Two fittings rather than one run of four: the pair on the left alter the
+   table, and the pair beside them only say things about it. */
 .table-controls__row {
     display: flex;
     align-items: flex-start;
@@ -2276,9 +2286,9 @@ onBeforeUnmount(() => {
 }
 
 /* What the corner takes its room from is the rail across the top. Stacked, the
-   fittings hand back the width they had before the rules joined them — though
-   what the rail has to clear is the widest thing down here, which from this
-   width on is the plate rather than either of them. */
+   corner is one fitting wide rather than two — and the plate, which is opened
+   under them, is wider than one of them, so from this width on it is the plate
+   the rail has to clear. */
 @media (width < 28rem) {
     .table-controls__row {
         flex-direction: column;
@@ -2300,17 +2310,6 @@ onBeforeUnmount(() => {
     box-shadow:
         inset 0 1px 0 rgb(200 164 104 / 18%),
         0 0.5rem 1.25rem rgb(0 0 0 / 24%);
-}
-
-/* Small enough to read as a mark stamped on the plate rather than as dice
-   somebody left on it. The bowl is where dice are that size. */
-.placard__dice {
-    display: flex;
-    gap: 0.25rem;
-}
-
-.placard__dice .die-face {
-    --size: 0.875rem;
 }
 
 /* Brass for a rule this match plays, which is the colour everything in play
@@ -2527,19 +2526,21 @@ onBeforeUnmount(() => {
 
 /* Held off the corner opposite, and the figure is whatever is widest down
    there: the rail wraps downwards past all of it. That is the two fittings
-   side by side, until they stack — under which the plate beneath them is the
-   widest thing instead, and it is wider than one fitting on its own. */
+   side by side, until they stack — under which the plate is the widest thing
+   instead, and it is wider than one fitting on its own. Room kept for the
+   plate whether or not it is out, because the press that opens it is not a
+   press the rail above can be asked to reflow for. */
 .chrome__top {
     display: flex;
     align-items: flex-start;
     justify-content: flex-end;
     gap: 1rem;
-    padding-left: calc(10.75rem + env(safe-area-inset-left, 0px));
+    padding-left: calc(13.75rem + env(safe-area-inset-left, 0px));
 }
 
 @media (width < 28rem) {
     .chrome__top {
-        padding-left: calc(9.75rem + env(safe-area-inset-left, 0px));
+        padding-left: calc(7.75rem + env(safe-area-inset-left, 0px));
     }
 }
 
