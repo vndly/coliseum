@@ -75,6 +75,11 @@ input {
     color: inherit;
 }
 
+/* Hide the browser's rectangular feedback on touch. */
+button {
+    -webkit-tap-highlight-color: transparent;
+}
+
 /* Never the browser default blue */
 :focus-visible {
     outline: 2px solid var(--brass);
