@@ -377,6 +377,19 @@ export class MatchClient {
           continue
         }
 
+        // This browser's own write, on its way to the server and not yet back.
+        // A slot carries a server stamp, and a stamp is a value the server fills
+        // in, so every write this browser makes is delivered twice: once from the
+        // cache with the stamp still empty, and again with what the server put
+        // there. Both parse to the same emote, and shown as they arrive a bot
+        // would say everything twice. Measured on the document rather than on the
+        // seat, because the seat is no longer this browser's to recognise — it
+        // speaks for the bots too, and writes what they say under them. The same
+        // trap the throws above are kept out of by counting sequence numbers.
+        if (change.doc.metadata.hasPendingWrites) {
+          continue
+        }
+
         const record = parseEmoteRecord(change.doc.id, change.doc.data())
 
         // This player's own emote is already on their own screen. It was put
@@ -603,10 +616,19 @@ export class MatchClient {
    * has to report. Nothing reads it, and nothing may — it is a client's request
    * for a server clock, which is null in this browser's own cache until the
    * server answers.
+   *
+   * The seat is named rather than assumed, exactly as the seat a throw is charged
+   * to is. This browser also speaks for the bots in a match it started, and what
+   * they say is written under the bot rather than under the person sitting here —
+   * which is what every other player reads it as, and what puts a bot's emote
+   * through the same listener as anybody else's. That is also why a bot's is not
+   * shown here as it is sent: the listener passes over this browser's own
+   * identifier alone, so a bot's arrives on its own and needs no help.
    * @param emote - Which of EMOTES to say
+   * @param sender - The seat saying it, this player's own or a bot's
    */
-  async sendEmote(emote: number): Promise<void> {
-    await setDoc(doc(this.reference, EMOTES, this.playerId), {
+  async sendEmote(emote: number, sender: string): Promise<void> {
+    await setDoc(doc(this.reference, EMOTES, sender), {
       emote: emote,
       sentAt: serverTimestamp(),
     })

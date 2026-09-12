@@ -18,7 +18,7 @@ import {onBeforeRouteLeave, useRoute, useRouter} from 'vue-router'
 import {MatchAudio} from '@/audio/match_audio'
 import DieFace from '@/components/die_face.vue'
 import RulesSheet from '@/components/rules_sheet.vue'
-import {nextBotMove} from '@/match/bots'
+import {nextBotEmote, nextBotMove} from '@/match/bots'
 import type {BotMove} from '@/match/bots'
 import {isMatchCode, normaliseMatchCode} from '@/match/codes'
 import {EMOTES, emote} from '@/match/emotes'
@@ -26,7 +26,7 @@ import {MatchClient} from '@/match/match_client'
 import type {EmoteRecord, MatchPlayer, MatchState, ThrowRecord} from '@/match/match_state'
 import {drawFromHand, nextActivePlayer, poolSize, returnedDiceKind, throwSize} from '@/match/rules'
 import {dieSkin, dieSkinCss} from '@/scene/die_skins'
-import type {ThrowLaunch} from '@/scene/die_state'
+import type {ThrowLaunch, ThrowResolution} from '@/scene/die_state'
 import {DIE_LIMIT} from '@/scene/dimensions'
 import {DishScene} from '@/scene/dish_scene'
 
@@ -111,6 +111,19 @@ const EMOTE_ROW_MILLISECONDS = 3000
 const EMOTE_ROWS = 4
 
 /**
+ * How long a bot is left quiet between one thing it says and the next, at its
+ * shortest and its longest.
+ *
+ * Far longer than the wait a player is held to, because a bot is answering every
+ * verdict at the table rather than choosing a moment, and drawn afresh each time
+ * for the same reason the pause before a move is: five bots on one interval
+ * answer in chorus, which is the one thing that would give away that nobody is
+ * sitting at those seats.
+ */
+const BOT_EMOTE_QUIET_MINIMUM = 12000 // Milliseconds
+const BOT_EMOTE_QUIET_MAXIMUM = 24000
+
+/**
  * The face the placard draws a group with.
  *
  * The same one the lobby's own picker is cut from, and for the same reason: a
@@ -149,6 +162,9 @@ let emoteCooldownTimer = 0 // The pending end of the wait between emotes, so it 
 let emoteRowTimer = 0 // The pending trim of the emotes on screen, so it can be called off
 let emoteSweepFrame = 0 // The frame the arc is told to start emptying on, so it can be called off
 let emoteArrival = 0 // Counts emotes shown here, which is what names one row apart from the next
+let lastThrower = '' // The seat that made the throw now being judged, for the bots to answer
+let judgedVerdict: ThrowResolution | null = null // The verdict being played out, for the same
+const botEmoteQuiet = new Map<string, number>() // Seat to the time it may next say something
 let botTimer = 0 // The pending move of the bot whose turn it is, so it can be called off
 let leaveAllowed = false // Set by every departure made here, so the guard lets those through
 let unmounted = false // Whether the screen has gone, for the connection still being opened
@@ -485,6 +501,22 @@ const showWaiting = computed<boolean>(
  */
 const atTable = computed<boolean>(() => !unreadable.value && !showWaiting.value)
 
+/**
+ * Whether anything is standing on the line across the bottom of the table.
+ *
+ * The emotes sit on that line while it is clear and are lifted off it while it
+ * is not, rather than being held permanently above a band that is usually empty.
+ * Three things can take it: the Pass button, the way back to the lobby once a
+ * finished match has been acknowledged, and the line a refused write is said on —
+ * which is centred across the whole width, so a long one reaches the corner the
+ * emotes are in.
+ */
+const bottomLineTaken = computed<boolean>(
+  () => error.value !== ''
+    || canPass.value
+    || (finished.value && acknowledgedEnd.value),
+)
+
 const seatsTaken = computed<number>(() => state.value?.players.length ?? 0)
 const seatsTotal = computed<number>(() => state.value?.playerCount ?? 0)
 
@@ -702,6 +734,10 @@ function onSnag(reason: unknown): void {
  * @param confirmed - Whether the server answered for this read, rather than the local cache
  */
 function onState(next: MatchState, confirmed: boolean): void {
+  // Held before the match is replaced, because the turn is what names the seat
+  // that threw and the verdict below is the write that moves it on
+  const previous = state.value
+
   // Somebody opened the match's address without a seat in it — a shared link,
   // or a browser that lost the identity it joined under. The lobby is the only
   // way in, so they go there with the code already filled in.
@@ -764,6 +800,20 @@ function onState(next: MatchState, confirmed: boolean): void {
   }
 
   resolving.value = true
+  judgedVerdict = next.verdict
+
+  // Read off the turn as it stood before this verdict rather than off the throw
+  // that made it. A throw does not move the turn — only the verdict does — so
+  // the seat the turn was sitting on is the seat that threw, whoever published
+  // it and whether or not this browser ever saw the throw itself. Taken from
+  // the record instead, it would be missing in every view that did not animate
+  // the throw: the throws beneath a match are delivered to every player but the
+  // one whose identifier they carry, and an origin's tabs share one identifier,
+  // so the view playing the bots in a match being played in another tab is told
+  // nothing at all. What it answered with instead was a seat holding no dice,
+  // which reads as an elimination to everything that asks.
+  lastThrower = previous?.players[previous.turnIndex]?.uid ?? ''
+
   scene?.applyVerdict(next.verdict, next.bowl)
 }
 
@@ -1008,6 +1058,80 @@ function runBotTurn(): void {
   scene?.throwUnaimed(throwSize(match, player.uid))
 }
 
+/**
+ * Lets the bots answer the throw the table has just watched being judged.
+ *
+ * Answered here rather than when the verdict landed, because a verdict lands
+ * before its dice have been taken out of the bowl: a bot remarking then would be
+ * talking over the thing it is remarking on. This is the moment the bowl it
+ * describes is actually on the table.
+ *
+ * One voice per throw, drawn from whichever bots are not still quiet from the
+ * last thing they said. A whole table answering one flush at once is a wall of
+ * glyphs rather than a table talking, and the log would spend its four rows on a
+ * single moment.
+ *
+ * Only ever from the view holding the bot seats, like every other move made for
+ * them: a browser's tabs share the identity those seats were taken under, so two
+ * views of one match would otherwise each speak for every bot at it. A write
+ * that is refused is dropped in silence, because nobody pressed anything — the
+ * line the player's own refusals are said on is for presses they made.
+ */
+function runBotEmotes(): void {
+  const match = state.value
+  const connected = client
+  const resolution = judgedVerdict
+
+  if (match === null || connected === null || resolution === null || !botDriver.value) {
+    return
+  }
+
+  // Spent as it is read. Nothing fires this twice for one verdict, and a stale
+  // one answered a second time would have the table remarking on a bowl that is
+  // no longer in front of it.
+  judgedVerdict = null
+
+  const now = performance.now()
+  const speaking: {seat: string,
+    emote: number}[] = []
+
+  for (const seat of match.players) {
+    if (!seat.bot || (botEmoteQuiet.get(seat.uid) ?? 0) > now) {
+      continue
+    }
+
+    const sent = nextBotEmote(match, seat.uid, resolution, lastThrower)
+
+    if (sent !== null) {
+      speaking.push({
+        seat: seat.uid,
+        emote: sent,
+      })
+    }
+  }
+
+  // Drawn rather than taken in seat order, so that the bot sitting first is not
+  // the one who answers every throw the whole table had something to say about
+  const chosen = speaking[Math.floor(Math.random() * speaking.length)]
+
+  if (chosen === undefined) {
+    return
+  }
+
+  const quiet = BOT_EMOTE_QUIET_MINIMUM
+    + Math.random() * (BOT_EMOTE_QUIET_MAXIMUM - BOT_EMOTE_QUIET_MINIMUM)
+
+  botEmoteQuiet.set(chosen.seat, now + quiet)
+
+  connected.sendEmote(chosen.emote, chosen.seat).catch((reason: unknown) => {
+    // Nobody pressed anything, so nothing is owed the screen — but a bot writing
+    // under a seat that is not the one this browser signed in as is the one write
+    // here a store could single out, and swallowed outright it would fail in
+    // perfect silence. Said where the emotes that cannot be followed are said.
+    console.error('A bot could not say anything.', reason)
+  })
+}
+
 function onPass(): void {
   const match = state.value
   const connected = client
@@ -1138,7 +1262,7 @@ function onSendEmote(sent: number): void {
   showEmote(seat, sent)
   startEmoteCooldown()
 
-  connected.sendEmote(sent).catch((reason: unknown) => {
+  connected.sendEmote(sent, seat.uid).catch((reason: unknown) => {
     error.value = describe(reason)
   })
 }
@@ -1621,6 +1745,7 @@ onMounted(() => {
   }
   scene.onResolved = () => {
     resolving.value = false
+    runBotEmotes()
   }
 
   scene.onPhysicsStarted = () => {
@@ -1928,6 +2053,7 @@ onBeforeUnmount(() => {
       tag="ul"
       name="said"
       class="emote-log"
+      :class="{'emote-log--lifted': bottomLineTaken}"
       role="log"
       aria-live="polite"
     >
@@ -2747,13 +2873,14 @@ onBeforeUnmount(() => {
     stroke-dashoffset: 100;
 }
 
-/* Held above the line the match's own errors are written on, so a refused write
-   and a table talking never stand on one another. Never pressed, so it never
-   takes the pointer: a drag that begins over a row still reaches the bowl. */
+/* On the same line as the button that sends them and the one press the table
+   asks for, which is where the bottom of this screen already is. Never pressed,
+   so it never takes the pointer: a drag that begins over a row still reaches
+   the bowl. */
 .emote-log {
     position: absolute;
     z-index: 1;
-    bottom: 6.5rem;
+    bottom: 1.25rem;
     left: calc(1.25rem + env(safe-area-inset-left, 0px));
     display: flex;
 
@@ -2769,6 +2896,16 @@ onBeforeUnmount(() => {
     gap: 0.375rem;
     pointer-events: none;
     list-style: none;
+    transition: bottom 200ms ease;
+}
+
+/* Lifted clear of whatever has taken that line — the centred Pass button, the
+   way back to the lobby, or the centred line a refused write is said on, any of
+   which a row would otherwise stand across on a narrow screen. Moved rather
+   than reserved for, so the corner is not held empty for the greater part of a
+   match in which none of the three is on screen. */
+.emote-log--lifted {
+    bottom: 6.5rem;
 }
 
 /* The rail's own pill, at the other end of the screen. Deliberately the same

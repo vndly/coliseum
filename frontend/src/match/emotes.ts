@@ -63,6 +63,25 @@ export const EMOTES: Emote[] = [
   },
 ]
 
+/**
+ * The emotes by name, for the code that chooses one instead of offering all
+ * eight.
+ *
+ * Positions in the list above, written out beside it rather than looked up, and
+ * the second reason nothing in that list may ever be reordered — the first being
+ * the emotes already in flight.
+ */
+export const EMOTE = {
+  whoa: 0,
+  ha: 1,
+  nice: 2,
+  onFire: 3,
+  brutal: 4,
+  ruined: 5,
+  please: 6,
+  hurry: 7,
+} as const
+
 /** The emote a set that has lost its footing falls back to. */
 const UNKNOWN: Emote = {
   glyph: '❔',

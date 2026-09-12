@@ -1,6 +1,8 @@
+import {EMOTE} from '@/match/emotes'
 import type {MatchPlayer, MatchState} from '@/match/match_state'
-import {FLUSH_FACES, poolSize} from '@/match/rules'
+import {FLUSH_FACES, poolSize, returnedDiceKind} from '@/match/rules'
 import {PAINTED_SKINS} from '@/scene/die_skins'
+import type {ThrowResolution} from '@/scene/die_state'
 
 /**
  * The players nobody is sitting behind: how they are drawn up, and how they
@@ -44,6 +46,27 @@ const DIE_FACES = 6
 
 /** How many of those take the die out of the match rather than into the bowl. */
 const REMOVING_FACES = 1
+
+/**
+ * How often a bot says each of the things it has to say, when it has the chance.
+ *
+ * Rising with how much just happened. A flush is the rarest thing this table
+ * produces and nearly always gets a word; an ordinary group mostly passes
+ * without one, because a bot that remarked on every throw it had an opinion
+ * about would remark on almost all of them. None of these is tuned against
+ * anything — they are the odds at which a table of bots reads as talkative
+ * rather than as noisy.
+ */
+const BOT_EMOTE_ODDS = {
+  matchOver: 0.9,
+  flush: 0.8,
+  elimination: 0.7,
+  lastDie: 0.5,
+  ownGroup: 0.35,
+  otherGroup: 0.3,
+  ownLoss: 0.3,
+  otherLoss: 0.2,
+} as const
 
 /** What a bot does with a turn it is already part way through. */
 export type BotMove = 'throw' | 'pass'
@@ -143,6 +166,94 @@ export function nextBotMove(state: MatchState, uid: string): BotMove {
   return throwValue(paying, state.groupSize) >= 0 ? 'throw' : 'pass'
 }
 
+/**
+ * What the bot in one seat says about the throw that has just been judged, or
+ * null for a throw not worth remarking on — which is most of them.
+ *
+ * Asked of the bowl rather than of a clock. A bot that spoke on a timer would be
+ * talking to itself, and the whole of an emote is that it is about something the
+ * table has just watched happen.
+ *
+ * Two of the answers are about a hand rather than about the bowl, and both are
+ * measured against the seat that threw. A hand only ever shrinks on its own
+ * player's throw, so the thrower is the only seat a verdict can have emptied or
+ * brought down to its last die — which is what lets the change be read straight
+ * off the match as it now stands, with no memory of how it stood before.
+ *
+ * Choosing is the whole of what happens here. The pacing that stops one bot
+ * saying two things in a breath belongs to the screen, beside the pause it draws
+ * before a move, for the same reason: this is the deciding, and the screen does
+ * the acting.
+ * @param state - The match as it stands, with this verdict already in it
+ * @param bot - The seat being asked
+ * @param resolution - What the throw came to
+ * @param thrower - The seat that made it
+ * @returns Which of EMOTES to say, or null to stay quiet
+ */
+export function nextBotEmote(
+  state: MatchState,
+  bot: string,
+  resolution: ThrowResolution,
+  thrower: string,
+): number | null {
+  // A throw whose seat cannot be named is a throw there is nothing to say about.
+  // Everything below reads a hand off the thrower, and a hand nobody is holding
+  // is an empty one — which is elimination to every question that asks.
+  if (!state.players.some((player) => player.uid === thrower)) {
+    return null
+  }
+
+  const mine = thrower === bot
+
+  // The match being over outranks whatever else the throw did, and is the one
+  // thing here a bot answers for itself rather than about somebody
+  if (state.winner !== null) {
+    if (!chance(BOT_EMOTE_ODDS.matchOver)) {
+      return null
+    }
+
+    return state.winner === bot ? EMOTE.onFire : EMOTE.nice
+  }
+
+  // Somebody has just thrown their last die away
+  if (!mine && poolSize(state, thrower) === 0) {
+    return chance(BOT_EMOTE_ODDS.elimination) ? EMOTE.brutal : null
+  }
+
+  // The same reading of the same hand, one die earlier, about its own
+  if (mine && poolSize(state, bot) === 1) {
+    return chance(BOT_EMOTE_ODDS.lastDie) ? EMOTE.please : null
+  }
+
+  const kind = returnedDiceKind(resolution)
+
+  if (kind === 'flush') {
+    return chance(BOT_EMOTE_ODDS.flush) ? EMOTE.whoa : null
+  }
+
+  if (kind === 'pair') {
+    if (!chance(mine ? BOT_EMOTE_ODDS.ownGroup : BOT_EMOTE_ODDS.otherGroup)) {
+      return null
+    }
+
+    return mine ? EMOTE.onFire : EMOTE.nice
+  }
+
+  // Sixes left the match and nothing came back, which is the only throw at this
+  // table that costs a hand dice and pays nobody
+  if (resolution.removed.length > 0) {
+    if (!chance(mine ? BOT_EMOTE_ODDS.ownLoss : BOT_EMOTE_ODDS.otherLoss)) {
+      return null
+    }
+
+    return mine ? EMOTE.ruined : EMOTE.ha
+  }
+
+  // A die that simply settled into the bowl, which is most throws and is not
+  // something anybody at a table would remark on
+  return null
+}
+
 /** The faces of the die about to be thrown that would bring dice back. */
 interface PayingFaces {
   completing: number // Values the bowl holds one short of a group
@@ -218,4 +329,13 @@ function throwValue(paying: PayingFaces, groupSize: number): number {
     + paying.flushing * (FLUSH_FACES.length - 1)
 
   return (gained - REMOVING_FACES - settling) / DIE_FACES
+}
+
+/**
+ * Whether a draw came in.
+ * @param likelihood - How often it should, between never and always
+ * @returns Whether this is one of those times
+ */
+function chance(likelihood: number): boolean {
+  return Math.random() < likelihood
 }
