@@ -81,6 +81,17 @@ const BOT_LOCK = 'coliseum-bots-'
 const TURN_CALL_MILLISECONDS = 1000
 
 /**
+ * How many seats stand on one row of the rail.
+ *
+ * Fixed rather than however many the width happens to allow. The rail is read
+ * at a glance and mid-throw, and one that re-wrapped as the names on it changed
+ * would put every seat somewhere new each time a player had to find theirs. Two
+ * is as many as the narrowest table has room for beside the fitting in the
+ * corner opposite, and it holds a full table of six to three rows.
+ */
+const RAIL_SEATS_PER_ROW = 2
+
+/**
  * How long a player must wait between saying one thing and the next.
  *
  * Every client is trusted, so this is the interface declining to offer a second
@@ -510,6 +521,36 @@ const bottomLineTaken = computed<boolean>(
     || canPass.value
     || (finished.value && acknowledgedEnd.value),
 )
+
+/**
+ * The rail, as the rows it is drawn in: the seats still in the match, then the
+ * ones out of it, cut into rows of RAIL_SEATS_PER_ROW.
+ *
+ * Filled a row at a time, so the rows above the last are always full and a last
+ * row of one hangs under the seat above it on a rail that packs to the right.
+ *
+ * The seats out are set after the seats still in rather than left where they
+ * play. Who is left is a fact about the match, so a spent seat keeps its pill —
+ * but the rail is otherwise in play order, and that order stops meaning
+ * anything the moment a seat is skipped, so the ones with nothing left to throw
+ * are moved out of the run rather than left as gaps in it. Ordered here rather
+ * than by the stylesheet, because the rows are cut from this sequence: CSS
+ * could only reorder seats inside the rows it had already been handed.
+ */
+const railRows = computed<MatchPlayer[][]>(() => {
+  const players = state.value?.players ?? []
+  const ordered = [
+    ...players.filter((player) => !isOut(player)),
+    ...players.filter((player) => isOut(player)),
+  ]
+  const rows: MatchPlayer[][] = []
+
+  for (let i = 0; i < ordered.length; i += RAIL_SEATS_PER_ROW) {
+    rows.push(ordered.slice(i, i + RAIL_SEATS_PER_ROW))
+  }
+
+  return rows
+})
 
 const seatsTaken = computed<number>(() => state.value?.players.length ?? 0)
 const seatsTotal = computed<number>(() => state.value?.playerCount ?? 0)
@@ -1964,39 +2005,52 @@ onBeforeUnmount(() => {
 
     <div v-else-if="!unreadable" :inert="behindOverlay" class="chrome">
       <header class="chrome__top">
-        <ul class="rail">
-          <li
-            v-for="player in state?.players ?? []"
-            :key="player.uid"
-            class="rail__player"
-            :class="{
-              'rail__player--active': !finished && player.uid === activePlayer?.uid,
-              'rail__player--out': isOut(player),
-            }"
+        <!-- A list for each row rather than one list that wraps, because a row
+             is what keeps its two pills against the right edge with the one gap
+             between them: a rail laid out in columns instead would either
+             stretch the pills to the widest name on it or open a different gap
+             on every row. Keyed by position, so a row stays the row it was and
+             only the seats on it change. -->
+        <div class="rail">
+          <ul
+            v-for="(row, index) in railRows"
+            :key="index"
+            class="rail__row"
           >
-            <span
-              class="rail__swatch"
-              :style="{background: colorOf(player).surface}"
-              :title="colorOf(player).name"
-            />
+            <li
+              v-for="player in row"
+              :key="player.uid"
+              class="rail__player"
+              :class="{
+                'rail__player--active': !finished && player.uid === activePlayer?.uid,
+                'rail__player--out': isOut(player),
+              }"
+            >
+              <span
+                class="rail__swatch"
+                :style="{background: colorOf(player).surface}"
+                :title="colorOf(player).name"
+              />
 
-            <span class="rail__name">{{ player.name }}</span>
+              <span class="rail__name">{{ player.name }}</span>
 
-            <!-- Counted while there is a hand to count. The nought at the end
-                 is the one figure worth nothing: the struck-through name has
-                 already said it, and a rail of them reads as a column of
-                 noughts rather than as the players still in.
+              <!-- Counted while there is a hand to count. The nought at the end
+                   is the one figure worth nothing: the struck-through name has
+                   already said it, and a rail of them reads as a column of
+                   noughts rather than as the players still in.
 
-                 Keyed on the count so the element is rebuilt whenever it changes,
-                 which is what replays the flare. Dice leaving a hand and coming
-                 back to it is the whole game, and it happens off screen. -->
-            <span
-              v-if="!isOut(player)"
-              :key="handOf(player)"
-              class="rail__hand"
-            >{{ handOf(player) }}</span>
-          </li>
-        </ul>
+                   Keyed on the count so the element is rebuilt whenever it
+                   changes, which is what replays the flare. Dice leaving a hand
+                   and coming back to it is the whole game, and it happens off
+                   screen. -->
+              <span
+                v-if="!isOut(player)"
+                :key="handOf(player)"
+                class="rail__hand"
+              >{{ handOf(player) }}</span>
+            </li>
+          </ul>
+        </div>
       </header>
 
       <!-- Nothing is said down here. The lit seat, the hand counts and the
@@ -2525,7 +2579,7 @@ onBeforeUnmount(() => {
 }
 
 /* Held off the corner opposite, and the figure is whatever is widest down
-   there: the rail wraps downwards past all of it. That is the two fittings
+   there: the rail stacks downwards past all of it. That is the two fittings
    side by side, until they stack — under which the plate is the widest thing
    instead, and it is wider than one fitting on its own. Room kept for the
    plate whether or not it is out, because the press that opens it is not a
@@ -2544,14 +2598,47 @@ onBeforeUnmount(() => {
     }
 }
 
+/* The rows stack downwards from the corner, which is the direction the corner
+   opposite keeps its room in */
 .rail {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.5rem;
+    min-width: 0;
+    max-width: 100%;
+}
+
+/* Its own line, so the two pills on it hold the one gap between them and sit
+   against the right edge whatever the names on them come to. Narrow enough and
+   they shrink into it rather than reflowing, which is the truncation the names
+   are already drawn for: where a seat is on the rail stays put. */
+.rail__row {
+    display: flex;
+    align-items: center;
     justify-content: flex-end;
     gap: 0.5rem;
     min-width: 0;
     max-width: 100%;
     list-style: none;
+}
+
+/* Below the width where two pills cannot hold even their own furniture, the
+   second one drops to a line of its own. Two pills floor at 9.55rem — the
+   paddings, the swatches, the gaps and the counts, with the names already
+   shrunk to nothing — and the rail is given the screen less the 10.25rem the
+   corner opposite and the chrome's insets take, so 20rem of table is the last
+   width at which the pair still fits. Under it the pills would keep shrinking
+   and stand their figures outside the lozenges they belong to.
+
+   Inert above this, and the query has to stay narrow to be: flex wraps on the
+   names rather than on the furniture, so one set any wider would put the rail
+   back to a seat a row at every phone width. A single pill still spills below
+   about 15rem, exactly as it did before the rail was laid out in rows. */
+@media (width < 20rem) {
+    .rail__row {
+        flex-wrap: wrap;
+    }
 }
 
 .rail__player {
@@ -2647,15 +2734,9 @@ onBeforeUnmount(() => {
 
 /* Kept on the rail rather than taken off it. Who is left is a fact about the
    match, and a pill that quietly disappeared would take the answer with it.
-
-   Set after the players still in, which on a rail that packs to the right is
-   the right of it. The seats are otherwise in the order they play in, and that
-   order stops meaning anything the moment a seat is skipped — so the ones with
-   nothing left to throw are moved out of the run rather than left as gaps in
-   it. Ordered rather than sorted, so the list itself stays in play order for
-   anything reading it out. */
+   Where it is kept is railRows' to say, since the rows are cut from the order
+   that puts the seats in. */
 .rail__player--out {
-    order: 1;
     background: rgb(14 18 16 / 35%);
 }
 
