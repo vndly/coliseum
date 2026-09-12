@@ -2961,12 +2961,15 @@ onBeforeUnmount(() => {
     transition: opacity 180ms ease-out, transform 180ms ease-out;
 }
 
+/* Left in the flow as it fades, which is not the usual answer for a leaving row.
+   Taken out of it, an absolutely positioned child of a flex container is placed
+   at that container's own start corner — and this one is held against its bottom
+   edge and empties from the top, so a zero-height log hangs the last row out of
+   it below the table and takes the whole page into a scrollbar with it. Nothing
+   is bought by taking it out, either: every row still standing is held against
+   that same bottom edge, so removing the one above them moves none of them. */
 .said-leave-active {
     transition: opacity 320ms ease-in;
-
-    /* Taken out of the flow as it goes, so the rows still standing close up under
-       it rather than waiting for the fade to finish */
-    position: absolute;
 }
 
 .said-enter-from {
