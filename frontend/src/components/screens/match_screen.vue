@@ -78,6 +78,16 @@ const BOT_LOCK = 'coliseum-bots-'
 const TURN_CALL_MILLISECONDS = 1000
 
 /**
+ * The face the placard draws a group with.
+ *
+ * The same one the lobby's own picker is cut from, and for the same reason: a
+ * group is dice that agree, so a group of two is two dice reading alike rather
+ * than the face two. Which value they agree on is arbitrary, so both places
+ * pick one and stay with it.
+ */
+const GROUP_FACE = 5
+
+/**
  * How long a bot is left to think, at its quickest and its slowest.
  *
  * Long enough that the call naming the seat has been read and whatever the
@@ -1377,61 +1387,108 @@ onBeforeUnmount(() => {
          are set apart from the pair in a fitting of their own, because what
          they do is not something about the table being altered. -->
     <div v-if="!unreadable" class="table-controls" :inert="tableControlsInert">
-      <div class="fitting" role="group" aria-label="Audio">
-        <button
-          type="button"
-          class="fitting__button"
-          :class="{'fitting__button--off': !musicEnabled}"
-          aria-label="Background music"
-          :aria-pressed="musicEnabled"
-          :title="musicEnabled ? 'Turn music off' : 'Turn music on'"
-          @pointerdown.stop
-          @keydown.stop
-          @click="onToggleMusic"
-        >
-          <svg class="fitting__icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M9 17V5l10-2v12" />
-            <circle cx="6.5" cy="17.5" r="2.5" />
-            <circle cx="16.5" cy="15.5" r="2.5" />
-            <path v-if="!musicEnabled" class="fitting__slash" d="M4 4l16 16" />
-          </svg>
-        </button>
+      <div class="table-controls__row">
+        <div class="fitting" role="group" aria-label="Audio">
+          <button
+            type="button"
+            class="fitting__button"
+            :class="{'fitting__button--off': !musicEnabled}"
+            aria-label="Background music"
+            :aria-pressed="musicEnabled"
+            :title="musicEnabled ? 'Turn music off' : 'Turn music on'"
+            @pointerdown.stop
+            @keydown.stop
+            @click="onToggleMusic"
+          >
+            <svg class="fitting__icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9 17V5l10-2v12" />
+              <circle cx="6.5" cy="17.5" r="2.5" />
+              <circle cx="16.5" cy="15.5" r="2.5" />
+              <path v-if="!musicEnabled" class="fitting__slash" d="M4 4l16 16" />
+            </svg>
+          </button>
 
-        <button
-          type="button"
-          class="fitting__button"
-          :class="{'fitting__button--off': !effectsEnabled}"
-          aria-label="Sound effects"
-          :aria-pressed="effectsEnabled"
-          :title="effectsEnabled ? 'Turn sound effects off' : 'Turn sound effects on'"
-          @click="onToggleEffects"
-        >
-          <svg class="fitting__icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 9h4l5-4v14l-5-4H4z" />
-            <template v-if="effectsEnabled">
-              <path d="M16 9.5a4 4 0 0 1 0 5" />
-              <path d="M18.5 6.5a8 8 0 0 1 0 11" />
-            </template>
-            <path v-else class="fitting__slash" d="M4 4l16 16" />
-          </svg>
-        </button>
+          <button
+            type="button"
+            class="fitting__button"
+            :class="{'fitting__button--off': !effectsEnabled}"
+            aria-label="Sound effects"
+            :aria-pressed="effectsEnabled"
+            :title="effectsEnabled ? 'Turn sound effects off' : 'Turn sound effects on'"
+            @click="onToggleEffects"
+          >
+            <svg class="fitting__icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 9h4l5-4v14l-5-4H4z" />
+              <template v-if="effectsEnabled">
+                <path d="M16 9.5a4 4 0 0 1 0 5" />
+                <path d="M18.5 6.5a8 8 0 0 1 0 11" />
+              </template>
+              <path v-else class="fitting__slash" d="M4 4l16 16" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="fitting">
+          <button
+            ref="rulesButton"
+            type="button"
+            class="fitting__button"
+            aria-label="How to play"
+            title="How to play"
+            @click="showRules = true"
+          >
+            <svg class="fitting__icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8.6 9.4a3.4 3.4 0 1 1 3.4 3.4v1.7" />
+              <circle cx="12" cy="17.9" r="0.9" fill="currentColor" stroke="none" />
+            </svg>
+          </button>
+        </div>
       </div>
 
-      <div class="fitting">
-        <button
-          ref="rulesButton"
-          type="button"
-          class="fitting__button"
-          aria-label="How to play"
-          title="How to play"
-          @click="showRules = true"
+      <!-- What this table plays by. Both are settled when the match is made
+           and never written again, and neither can be read off the bowl: a
+           player who joined by code has no other way of knowing whether three
+           of a kind is a group or whether the flush is in.
+
+           A plate rather than a third fitting, because there is nothing here
+           to press. The rules sheet beside it stays the game rather than this
+           match, which is what lets the lobby open the same one.
+
+           Held back until the seats are full, unlike the fittings above it.
+           The card that waits for them is centred and grows with every seat,
+           so on a phone it reaches up into this corner — and the plate, which
+           is drawn over it, would stand across the match code, which is the
+           one thing that screen exists to show. -->
+      <dl v-if="state !== null && !showWaiting" class="placard">
+        <dt class="label">Groups</dt>
+
+        <!-- Dice rather than a figure, the way every count in this interface
+             is said. Lit, because this is the answer rather than the choice. -->
+        <dd
+          class="placard__dice"
+          role="img"
+          :aria-label="`${state.groupSize} dice`"
         >
-          <svg class="fitting__icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M8.6 9.4a3.4 3.4 0 1 1 3.4 3.4v1.7" />
-            <circle cx="12" cy="17.9" r="0.9" fill="currentColor" stroke="none" />
-          </svg>
-        </button>
-      </div>
+          <DieFace
+            v-for="die in state.groupSize"
+            :key="die"
+            :value="GROUP_FACE"
+            lit
+          />
+        </dd>
+
+        <dt class="label">Flush</dt>
+
+        <!-- The one rule a match can turn off, and the one with no picture:
+             what is switched off is a hand nobody plays, and a hand nobody
+             plays cannot be drawn. So it is named, in the lobby's own words. -->
+        <dd
+          class="placard__answer"
+          :class="{'placard__answer--off': !state.flush}"
+        >
+          {{ state.flush ? 'On' : 'Off' }}
+        </dd>
+      </dl>
     </div>
 
     <!-- Mounted from the first frame and merely covered while the seats fill,
@@ -1683,32 +1740,88 @@ onBeforeUnmount(() => {
    hardware belonging to the table rather than as floating app chrome, and leave
    the upper-right to the players the rail already names.
 
-   Two fittings rather than one run of three: the pair on the left alter the
-   table, and the one beside them does not. */
+   The switches on top and the plate under them: everything in the row can be
+   altered, and nothing on the plate can be — which is why the corner passes
+   the pointer on and the fittings take it back, the arrangement the chrome
+   opposite is built on. The table is behind all of this, and a press that
+   lands on a thing with nothing to press is a press meant for the bowl. */
 .table-controls {
     position: absolute;
     z-index: 1;
     top: calc(1.25rem + env(safe-area-inset-top, 0px));
     left: calc(1.25rem + env(safe-area-inset-left, 0px));
     display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+    pointer-events: none;
+}
+
+/* Two fittings rather than one run of three: the pair on the left alter the
+   table, and the one beside them does not. */
+.table-controls__row {
+    display: flex;
     align-items: flex-start;
     gap: 0.5rem;
 }
 
-/* What the fittings take their room from is the rail across the top, and set
-   side by side under this they leave it a column one pill wide. Stacked, they
-   hand the top of the table back the width they had before the rules joined
-   them, and spend the empty corner underneath instead. */
+/* What the corner takes its room from is the rail across the top. Stacked, the
+   fittings hand back the width they had before the rules joined them — though
+   what the rail has to clear is the widest thing down here, which from this
+   width on is the plate rather than either of them. */
 @media (width < 28rem) {
-    .table-controls {
+    .table-controls__row {
         flex-direction: column;
     }
+}
+
+/* The plate the table's own rules are stamped on. Cut from the same dark
+   walnut and brass as the fittings above it, and square where they are round:
+   a fitting is a thing to press, and this is a thing to read. */
+.placard {
+    display: grid;
+    grid-template-columns: auto auto;
+    align-items: center;
+    gap: 0.375rem 0.625rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--brass-edge);
+    border-radius: 0.5rem;
+    background: rgb(18 11 6 / 78%);
+    box-shadow:
+        inset 0 1px 0 rgb(200 164 104 / 18%),
+        0 0.5rem 1.25rem rgb(0 0 0 / 24%);
+}
+
+/* Small enough to read as a mark stamped on the plate rather than as dice
+   somebody left on it. The bowl is where dice are that size. */
+.placard__dice {
+    display: flex;
+    gap: 0.25rem;
+}
+
+.placard__dice .die-face {
+    --size: 0.875rem;
+}
+
+/* Brass for a rule this match plays, which is the colour everything in play
+   is named in here — the hand worth counting, the button worth pressing. */
+.placard__answer {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--brass);
+}
+
+/* And faded for one it does not. Not struck through: the rail already spends
+   that on a player who is out, and a rule nobody chose to play was never in. */
+.placard__answer--off {
+    color: var(--bone-faint);
 }
 
 .fitting {
     display: flex;
     gap: 0.25rem;
     padding: 0.25rem;
+    pointer-events: auto;
     border: 1px solid var(--brass-edge);
     border-radius: 999px;
     background: rgb(18 11 6 / 78%);
@@ -1902,10 +2015,10 @@ onBeforeUnmount(() => {
     pointer-events: none;
 }
 
-/* Held off the fittings in the corner opposite. The figure is the width of the
-   two of them side by side, which is what the rail has to start clear of —
-   narrower than that they are stacked, and the rail only has to clear the one
-   on top. */
+/* Held off the corner opposite, and the figure is whatever is widest down
+   there: the rail wraps downwards past all of it. That is the two fittings
+   side by side, until they stack — under which the plate beneath them is the
+   widest thing instead, and it is wider than one fitting on its own. */
 .chrome__top {
     display: flex;
     align-items: flex-start;
@@ -1916,7 +2029,7 @@ onBeforeUnmount(() => {
 
 @media (width < 28rem) {
     .chrome__top {
-        padding-left: calc(6.5rem + env(safe-area-inset-left, 0px));
+        padding-left: calc(9.75rem + env(safe-area-inset-left, 0px));
     }
 }
 
