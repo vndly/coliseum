@@ -181,7 +181,7 @@ const writing = ref(false) // And its write has not reached the match yet
 const simulating = ref(false) // Whether the scene has a physics world to throw into
 const resolving = ref(false) // A verdict is being played out, here and on every other table
 const calledTurn = ref(-1) // The seat the call names, once a turn has been called
-const calling = ref(false) // Whether that call is up, and the table held for it
+const calling = ref(false) // Whether that call is up, and the move it names held back for it
 const acknowledgedLoss = ref(false) // Whether this player has closed the notice that they are out
 const acknowledgedEnd = ref(false) // Whether this player has closed the notice naming the winner
 const showLeave = ref(false) // Whether the question about leaving the match is up
@@ -189,7 +189,6 @@ const showRules = ref(false) // Whether the rules stand over the table
 const picking = ref(false) // Whether the emotes are laid out over the table
 const cooling = ref(false) // Whether the wait between one emote and the next is running
 const sweeping = ref(false) // And whether the arc drawing that wait has begun emptying
-const owedRulesFocus = ref(false) // And whether the fitting that opened them is owed the keyboard
 const unreadable = ref(false) // Whether the match itself can no longer be read
 const botDriver = ref(false) // Whether this view is the one playing the seats nobody is behind
 const copyResult = ref<'none' | 'done' | 'failed'>('none') // What the last press of copy came to
@@ -302,9 +301,10 @@ const callLine = computed<string>(() => {
 // finished with — or would move the turn out from under the verdict on its way
 // to the thrower's own hand.
 //
-// Closed again for as long as a turn is being called. The layer that carries
-// the call is already holding every pointer on the screen; this is what stops
-// the one press that layer cannot — a Pass the keyboard still has hold of.
+// Closed again for as long as a turn is being called. The call is the one beat
+// in a match where the table is worth looking at rather than played on, and the
+// layer carrying it takes nothing — so the two controls that would answer it
+// are the only things holding it, and everything else on screen stays live.
 //
 // And closed for as long as the emotes are laid out. Nothing on that layer takes
 // a pointer it was not given, and the press that puts it away is deliberately
@@ -451,16 +451,14 @@ const overlayShowing = computed<boolean>(() => noticeShowing.value || showRules.
  * inert is not one of the attributes Vue knows to take off an element on a
  * false — written out as the string "false" it is every bit as inert as it is
  * written out as anything else.
+ *
+ * It shuts the fittings and the emote corner as well as the chrome: both are
+ * hardware set into the table, and neither is reachable while something stands
+ * over it. A turn being called is not one of those — it is read and not
+ * answered, and nothing about turning the music down or looking up the rules
+ * bears on whose turn it is.
  */
 const behindOverlay = computed<true | undefined>(() => overlayShowing.value || undefined)
-
-// The fittings stay in the table before and during play, but never sit in the
-// keyboard or pointer path while another layer owns the whole screen. The same
-// answer serves the emote corner opposite: both are hardware set into the table,
-// and neither is reachable while something stands over it.
-const tableControlsInert = computed<true | undefined>(
-  () => overlayShowing.value || calling.value || undefined,
-)
 
 const winnerLine = computed<string>(() => {
   const match = state.value
@@ -572,26 +570,12 @@ watch(settledTurn, (seat) => {
   }, TURN_CALL_MILLISECONDS)
 })
 
-// The keyboard owed to the rules fitting, handed over the moment the call stops
-// holding the table and the fittings come back out of their inert layer
-watch(calling, (held) => {
-  if (held || !owedRulesFocus.value) {
-    return
-  }
-
-  owedRulesFocus.value = false
-
-  void nextTick(() => {
-    rulesButton.value?.focus()
-  })
-})
-
 // The emotes belong to the table, so they go away with it. Anything standing over
 // the match shuts this corner along with the fittings opposite, and a set of
 // glyphs left open inside an inert layer is a panel nobody can put away, over a
 // card that is asking something. Closed bare, without handing the keyboard back:
 // whatever raised the layer is owed the focus, and the watcher below gives it.
-watch(tableControlsInert, (shut) => {
+watch(behindOverlay, (shut) => {
   if (shut) {
     picking.value = false
   }
@@ -1381,20 +1365,9 @@ function onStay(): void {
  * The sheet is dropped from the page rather than hidden, so closing it destroys
  * whatever inside it was holding focus, and focus falls to the document — where
  * the next tab starts again from the top and nothing has said the rules closed.
- *
- * Not always at once. A turn called while the rules were open holds the whole
- * table for the length of the call, fittings included, and focus handed to an
- * element inside an inert one is focus dropped on the floor. So it is owed
- * rather than given, and the watcher above pays it when the call lets go.
  */
 function closeRules(): void {
   showRules.value = false
-
-  if (calling.value) {
-    owedRulesFocus.value = true
-
-    return
-  }
 
   void nextTick(() => {
     rulesButton.value?.focus()
@@ -1634,30 +1607,31 @@ async function holdScreenAwake(): Promise<void> {
  * Answers Escape with the same question the back button is answered with.
  *
  * Bound on the window, because the match is a canvas and a scrim: there is
- * usually nothing focused for the press to travel up from. Four things get it
+ * usually nothing focused for the press to travel up from. Three things get it
  * first, and each of them is already an answer to the same press — the rules
- * sheet, which closes on it; a card that is already asking something; an aim
- * mid-drag, which `ThrowController` abandons on it; and a call, which holds the
- * whole table and is answered by nobody.
+ * sheet, which closes on it; a card that is already asking something; and an
+ * aim mid-drag, which `ThrowController` abandons on it. A turn being called is
+ * not among them: it is read rather than answered, so a press it was never
+ * aimed at goes to the match like any other.
  *
- * Bound in the capture phase, which is what makes two of those four true. The
- * controller's own listener is on the window as well and is added first, in the
- * scene's constructor, so on the way up it would have cancelled the aim this
- * asks about before it could be asked — the guard would read an aim that had
- * just stopped existing and open the card anyway. And the music switch stops
- * every keydown it is given, to keep the press that works it from spending the
- * gesture the autoplay retry is waiting on; on the way up that would swallow
- * this press on one of three neighbouring controls and no other. Capture is
- * ahead of both. What it costs is that nothing below can take Escape by
- * stopping it any more — a control that wants it has to be named in the guards
- * above instead.
+ * Bound in the capture phase, which is what makes the last of those true, and
+ * what gets this press here at all. The controller's own listener is on the
+ * window as well and is added first, in the scene's constructor, so on the way
+ * up it would have cancelled the aim this asks about before it could be asked —
+ * the guard would read an aim that had just stopped existing and open the card
+ * anyway. And the music switch stops every keydown it is given, to keep the
+ * press that works it from spending the gesture the autoplay retry is waiting
+ * on; on the way up that would swallow this press on one of three neighbouring
+ * controls and no other. Capture is ahead of both. What it costs is that
+ * nothing below can take Escape by stopping it any more — a control that wants
+ * it has to be named in the guards above instead.
  *
- * The emotes are answered here rather than deferred to, unlike those four. They
- * are the nearest thing a player has open, so the press closes them and stops —
- * asking about leaving the match in the same breath would answer a press nobody
- * aimed at the match. Their own handlers cover the keyboard that is inside them;
- * this covers the far commoner case of a set opened by a thumb, where the press
- * has nothing to travel up from.
+ * The emotes are answered here rather than deferred to, unlike those three.
+ * They are the nearest thing a player has open, so the press closes them and
+ * stops — asking about leaving the match in the same breath would answer a
+ * press nobody aimed at the match. Their own handlers cover the keyboard that
+ * is inside them; this covers the far commoner case of a set opened by a thumb,
+ * where the press has nothing to travel up from.
  *
  * A finished or unreadable match is left alone for the same reason the back
  * button leaves it alone: there is nothing to walk out of, and the card on
@@ -1665,7 +1639,7 @@ async function holdScreenAwake(): Promise<void> {
  * @param event - The key pressed, wherever it landed
  */
 function onKeyDown(event: KeyboardEvent): void {
-  if (event.key !== 'Escape' || showRules.value || noticeShowing.value || calling.value) {
+  if (event.key !== 'Escape' || showRules.value || noticeShowing.value) {
     return
   }
 
@@ -1826,7 +1800,7 @@ onBeforeUnmount(() => {
          moment, and neither choice is buried behind another press. The rules
          are set apart from the pair in a fitting of their own, because what
          they do is not something about the table being altered. -->
-    <div v-if="!unreadable" class="table-controls" :inert="tableControlsInert">
+    <div v-if="!unreadable" class="table-controls" :inert="behindOverlay">
       <div class="table-controls__row">
         <div class="fitting" role="group" aria-label="Audio">
           <button
@@ -2087,7 +2061,7 @@ onBeforeUnmount(() => {
          The glyphs are laid out in a tray that slides out of it, and nothing
          about them is named in words — eight pictures in a well, the way the
          lobby lays its sixteen dice out in one. -->
-    <div v-if="atTable" class="emote-controls" :inert="tableControlsInert">
+    <div v-if="atTable" class="emote-controls" :inert="behindOverlay">
       <div ref="emotePicker" class="emote">
         <ul v-if="picking" class="emote__set" @keydown.esc="closePicker">
           <li v-for="(option, index) in EMOTES" :key="option.glyph">
@@ -2142,16 +2116,14 @@ onBeforeUnmount(() => {
     <!-- Whose turn it is is the one thing the table cannot say for itself: the
          rail lights the new seat, but a player watching the bowl never sees it
          happen. Called in the middle of the screen, over the bowl, and answered
-         by nobody — it holds the table for a beat and then lets it go.
+         by nobody — it stands over the table for a beat without taking it, so
+         a player who wants to watch the bowl from another angle while reading
+         it still can.
 
          Under the cards below rather than over them, so that a question already
-         being asked keeps both the screen and the presses that answer it.
-
-         The right button orbits the camera, and this layer stands in front of
-         the canvas that keeps the browser's menu on that button out of the way,
-         so it has to keep it out of the way itself. -->
+         being asked keeps both the screen and the presses that answer it. -->
     <Transition name="call">
-      <div v-if="calling" class="call" role="status" @contextmenu.prevent>
+      <div v-if="calling" class="call" role="status">
         <p class="call__line" :class="{'call__line--mine': calledPlayer?.uid === uid}">
           {{ callLine }}
         </p>
@@ -3020,9 +2992,11 @@ onBeforeUnmount(() => {
    The turn being called
    ============================================ */
 
-/* The one layer here that keeps every pointer it is given rather than passing
-   it down to the canvas. A call cannot be answered, so while one is up the
-   table is held: no gesture, no orbit, no button.
+/* Read rather than answered, and never in the way: the call passes every
+   pointer straight down to the table, so the camera, the switches and the
+   emotes all stay in the player's hands for the beat it is up. What it does
+   hold off is the one thing that would be answering it — a throw or a pass —
+   and that is held by the controls themselves rather than by this layer.
 
    Lit rather than curtained off. A flat scrim would take the bowl away for the
    whole of the call, and the bowl is what the player has just been told to look
@@ -3042,12 +3016,10 @@ onBeforeUnmount(() => {
         rgb(14 18 16 / 0%) 100%
     );
 
-    /* Holding the pointer is not enough on touch: the two fingers that orbit
-       the camera are also the browser's own zoom, and a layer that only stopped
-       them reaching the canvas would hand them to the page instead — leaving
-       the table zoomed long after the call has gone. The canvas gives this up
-       for the same reason. */
-    touch-action: none;
+    /* Which is also what keeps the browser's own gestures off it: a layer
+       nobody can hit is not the element a right button or a second finger is
+       measured against, so the canvas below goes on answering both. */
+    pointer-events: none;
     z-index: 2;
 }
 
@@ -3078,10 +3050,6 @@ onBeforeUnmount(() => {
 
 .call-leave-active {
     transition: opacity 400ms ease-in;
-
-    /* The table is let go the moment the call starts to leave, so that the last
-       of the fade is not felt as a refused drag */
-    pointer-events: none;
 }
 
 .call-enter-from,
