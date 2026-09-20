@@ -34,13 +34,16 @@ const OPEN_WINDOW_MILLISECONDS = 5 * 60 * 1000
  *
  * A reduction of the stored match rather than the match itself: a lobby has no
  * use for a bowl, and a list of them would be carrying every die in every
- * waiting match around for the sake of a name and a count.
+ * waiting match around for the sake of a name, counts, and the two rules the
+ * creator chose.
  */
 export interface OpenMatch {
   code: string
   host: string // Whoever made it, who is always the first seat
   seatsTaken: number
   seatsTotal: number
+  groupSize: number
+  flush: boolean
   uids: string[] // Everyone already sitting in it, so a player can be shown their own match
   createdAt: number // Milliseconds, for judging the match still recent
 }
@@ -150,6 +153,8 @@ function readOpenMatch(code: string, value: unknown): OpenMatch | null {
     host: host.name,
     seatsTaken: state.players.length,
     seatsTotal: seats,
+    groupSize: state.groupSize,
+    flush: state.flush,
     uids: state.players.map((player) => player.uid),
     createdAt: createdAt.toMillis(),
   }

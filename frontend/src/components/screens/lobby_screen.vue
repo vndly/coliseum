@@ -500,15 +500,15 @@ function isSeated(match: OpenMatch): boolean {
 }
 
 /**
- * What a row says when it is read out rather than looked at, since the dice on
- * it are decorative and carry nothing on their own.
+ * What a row says when it is read out rather than looked at.
  * @param match - The match the row was drawn from
- * @returns The match named, and how full it is
+ * @returns The match's creator, players, and chosen rules
  */
 function seatLine(match: OpenMatch): string {
-  const seats = `${match.seatsTaken} of ${match.seatsTotal} seats taken`
+  const creator = isSeated(match) ? 'Your match' : match.host
+  const flush = match.flush ? 'on' : 'off'
 
-  return isSeated(match) ? `Your match, ${seats}` : `${match.host}, ${seats}`
+  return `${creator}, ${match.seatsTaken} of ${match.seatsTotal} players, groups of ${match.groupSize}, flush ${flush}`
 }
 
 /**
@@ -732,22 +732,22 @@ function onPaste(): void {
               :disabled="!canTakeSeat"
               @click="onTakeSeat(match)"
             >
-              <span class="match__host" :class="{'match__host--yours': isSeated(match)}">
-                {{ isSeated(match) ? 'Your match' : match.host }}
+              <span class="match__column">
+                <span class="match__host">
+                  {{ isSeated(match) ? 'Your match' : match.host }}
+                </span>
+                <span class="match__detail">
+                  Players {{ match.seatsTaken }}/{{ match.seatsTotal }}
+                </span>
               </span>
 
-              <!-- The dice count the seats the same way they do inside the
-                   match, lit as far as the seats are taken — until this is the
-                   row being joined, when what is happening takes their place -->
+              <!-- The rules the creator settled for this table — until this is
+                   the row being joined, when what is happening takes their place -->
               <span v-if="seatingCode === match.code" class="match__word">Joining…</span>
 
-              <span v-else class="match__seats">
-                <DieFace
-                  v-for="seat in match.seatsTotal"
-                  :key="seat"
-                  :value="seat"
-                  :lit="seat <= match.seatsTaken"
-                />
+              <span v-else class="match__column match__column--rules">
+                <span class="match__detail">Groups: {{ match.groupSize }}</span>
+                <span class="match__detail">Flush: {{ match.flush ? 'ON' : 'OFF' }}</span>
               </span>
             </button>
           </li>
@@ -1061,7 +1061,7 @@ function onPaste(): void {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    max-height: min(13.5rem, 30vh);
+    max-height: min(15rem, 30vh);
     overflow-y: auto;
     list-style: none;
     scrollbar-width: thin;
@@ -1072,9 +1072,9 @@ function onPaste(): void {
    as something to press rather than something to read. The rim is there before
    it is lit, so hovering a row does not move the one under it */
 .match {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
-    justify-content: space-between;
     gap: 0.75rem;
     width: 100%;
     padding: 0.625rem 0.75rem;
@@ -1090,40 +1090,51 @@ function onPaste(): void {
     background: var(--brass-glow);
 }
 
+/* Two ledger lines on either side: who and how full on the left, then the
+   rules this table plays by on the right. The first column may shrink so a
+   long creator name gives way before it can push the rules out of the row. */
+.match__column {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+    text-align: left;
+}
+
+.match__column--rules {
+    align-items: flex-end;
+    text-align: right;
+}
+
 /* A name is whatever its player typed, so it is cut off at the end of the room
-   it has rather than allowed to push the dice off the row */
+   it has rather than allowed to push the rules off the row */
 .match__host {
     overflow: hidden;
-    font-size: 0.9375rem;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
     font-weight: 500;
+    line-height: 1.25;
+    color: var(--bone);
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-/* A match this player is already sitting in, in the brass everything of theirs
-   on this screen is named in */
-.match__host--yours {
-    color: var(--brass);
+/* Match facts use the same fixed-width face as codes and counters elsewhere,
+   turning the two columns into a small scorecard rather than body copy. */
+.match__detail {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    line-height: 1.25;
+    color: var(--bone-dim);
+    white-space: nowrap;
 }
 
-/* Stands where the dice stood, once the row has been pressed and the count has
-   nothing left to say */
+/* Stands where the rules stood once the row has been pressed. */
 .match__word {
     flex-shrink: 0;
     font-size: 0.8125rem;
     color: var(--brass);
-}
-
-/* The dice are the whole of what a row counts, so they are read as one run and
-   never wrap out of it — a six-seat match keeps its six on the line */
-.match__seats {
-    display: flex;
-    flex-shrink: 0;
-    gap: 0.25rem;
-}
-
-.match__seats .die-face {
-    --size: 1.25rem;
 }
 
 /* What the greyed-out rows are waiting for. Only while the name is missing:
