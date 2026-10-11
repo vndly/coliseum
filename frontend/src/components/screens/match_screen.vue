@@ -2071,10 +2071,10 @@ onBeforeUnmount(() => {
     <!-- Mounted from the first frame and merely covered while the seats fill,
          so the wait for the last player is also the wait for the physics.
 
-         Hidden rather than dropped while the question about leaving is up: it
-         is the wait that decides which chrome exists, and the two scrims over
-         one another only muddy the card that is being answered. -->
-    <div v-if="showWaiting" v-show="!showLeave" :inert="behindOverlay" class="waiting">
+         Left standing while the question about leaving is up, so the question
+         is asked over the arena the wait is drawn in rather than over a bare
+         bowl, with the card behind it dimmed under the question's scrim. -->
+    <div v-if="showWaiting" :inert="behindOverlay" class="waiting">
       <div class="waiting__card">
         <p class="label">Match code</p>
 
