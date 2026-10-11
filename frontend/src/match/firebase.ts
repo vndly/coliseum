@@ -8,8 +8,8 @@ import {getFirestore} from 'firebase/firestore'
  *
  * A web configuration is a set of public identifiers rather than a secret: it
  * ships in the bundle by design, and what actually guards the data is the
- * project's security rules. Analytics is deliberately left uninitialised —
- * it is a measurable amount of bundle for a game that measures nothing.
+ * project's security rules. The measurement ID is what links it to Analytics,
+ * which `src/analytics/analytics.ts` starts — here it is only an identifier.
  */
 const firebaseConfig = {
   apiKey: 'AIzaSyDIF2WYLkR9jdr_yV739N_F1fzVv_HuPSU',
@@ -18,9 +18,10 @@ const firebaseConfig = {
   storageBucket: 'coliseum-game.firebasestorage.app',
   messagingSenderId: '788973501695',
   appId: '1:788973501695:web:d851d4977b95c3cc2c20ca',
+  measurementId: 'G-NLVZ2V1MT2',
 }
 
-const app = initializeApp(firebaseConfig)
+export const app = initializeApp(firebaseConfig)
 
 export const firestore = getFirestore(app)
 

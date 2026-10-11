@@ -22,6 +22,15 @@ const THROWS = 'throws'
 const EMOTES = 'emotes'
 const CODE_ATTEMPTS = 8 // Before giving up on finding a code nobody is using
 
+/** What a join came to, for the lobby to report. */
+export interface JoinOutcome {
+  seated: boolean // Whether it took a new seat, rather than finding the player already in one
+  started: boolean // Whether that seat was the last, and the match began with it
+  playerCount: number
+  groupSize: number
+  flush: boolean
+}
+
 /**
  * One player's connection to one match.
  *
@@ -173,17 +182,26 @@ export class MatchClient {
    * @param code - The match to join
    * @param name - What to call this player
    * @param color - The colour this player's own dice are painted in
+   * @returns What the join came to, as the transaction that landed saw it
    */
-  static async join(code: string, name: string, color: number): Promise<void> {
+  static async join(code: string, name: string, color: number): Promise<JoinOutcome> {
     const playerId = await currentPlayerId()
     const reference = doc(firestore, MATCHES, code)
 
-    await runTransaction(firestore, async (transaction) => {
+    return runTransaction(firestore, async (transaction): Promise<JoinOutcome> => {
       const snapshot = await transaction.get(reference)
       const state = parseMatchState(code, snapshot.data())
 
       if (state === null) {
         throw new Error('No match with that code.')
+      }
+
+      const outcome: JoinOutcome = {
+        seated: false,
+        started: false,
+        playerCount: state.playerCount,
+        groupSize: state.groupSize,
+        flush: state.flush,
       }
 
       // Already seated. A reload, a retry after a write that did land, or the
@@ -198,11 +216,11 @@ export class MatchClient {
         // it is: the lobby has already kept the new one, and a field saying one
         // thing while the match says another survives a reload.
         if (player === undefined || state.phase !== 'lobby') {
-          return
+          return outcome
         }
 
         if (player.name === name && player.color === color) {
-          return
+          return outcome
         }
 
         const revised = [...state.players]
@@ -223,7 +241,7 @@ export class MatchClient {
           [`pools.${playerId}`]: startingHand(color),
         })
 
-        return
+        return outcome
       }
 
       if (state.phase !== 'lobby') {
@@ -268,6 +286,12 @@ export class MatchClient {
       }
 
       transaction.update(reference, update)
+
+      return {
+        ...outcome,
+        seated: true,
+        started: players.length === state.playerCount,
+      }
     })
   }
 
@@ -539,23 +563,24 @@ export class MatchClient {
    * @param seq - The throw that has just finished
    * @param atRest - Every die in the bowl as it stopped, from this player's own table
    * @param thrower - The seat this browser threw from, or null when it is judging for somebody else
+   * @returns The winner this write named, or null when it named none or was not the write that counted
    */
   async submitVerdict(
     seq: number,
     atRest: DieSnapshot[],
     thrower: string | null,
-  ): Promise<void> {
-    await runTransaction(firestore, async (transaction) => {
+  ): Promise<string | null> {
+    return runTransaction(firestore, async (transaction): Promise<string | null> => {
       const snapshot = await transaction.get(this.reference)
       const state = parseMatchState(this.code, snapshot.data())
 
       if (state === null || state.phase !== 'playing') {
-        return
+        return null
       }
 
       // Already judged, by the thrower or by whoever stepped in first
       if (state.throwSeq !== seq || (state.verdict !== null && state.verdict.seq >= seq)) {
-        return
+        return null
       }
 
       const outcome = resolveThrow(state, seq, atRest)
@@ -592,6 +617,8 @@ export class MatchClient {
         // Read in this same transaction, so it is counted rather than incremented
         bowlVersion: state.bowlVersion + 1,
       })
+
+      return outcome.winner
     })
   }
 

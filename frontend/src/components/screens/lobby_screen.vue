@@ -11,6 +11,13 @@
 <script setup lang="ts">
 import {computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch} from 'vue'
 import {useRoute, useRouter} from 'vue-router'
+import {trackAppError,
+  trackJoinFailed,
+  trackMatchCreated,
+  trackMatchJoined,
+  trackMatchStarted,
+  trackRulesOpened} from '@/analytics/analytics'
+import type {JoinMethod, JoinRefusal, MatchSetup} from '@/analytics/analytics'
 import DieFace from '@/components/die_face.vue'
 import RulesSheet from '@/components/rules_sheet.vue'
 import {createBots} from '@/match/bots'
@@ -233,6 +240,11 @@ function closePalette(): void {
   }
 }
 
+function openRules(): void {
+  showRules.value = true
+  trackRulesOpened('lobby')
+}
+
 /**
  * Puts the rules away and gives the button that opened them the keyboard back.
  *
@@ -320,6 +332,27 @@ function describe(reason: unknown): string {
 }
 
 /**
+ * Why a seat was refused, for the report rather than for the player. Read off
+ * the sentence the join answered with, because that sentence is all the join
+ * hands back — so a refusal reworded in the client is reported as other until
+ * it is reworded here too.
+ * @param refusal - The sentence the join answered with
+ * @returns The reason it gave
+ */
+function joinRefusal(refusal: string): JoinRefusal {
+  switch (refusal) {
+    case 'No match with that code.':
+      return 'not_found'
+    case 'That match has already started.':
+      return 'started'
+    case 'That match is full.':
+      return 'full'
+    default:
+      return 'other'
+  }
+}
+
+/**
  * Puts the caret on whichever half of a seat is still missing.
  *
  * A name is remembered between matches, so a player who has one already is here
@@ -374,6 +407,20 @@ async function runCreate(withBots: boolean): Promise<void> {
       bots,
     )
 
+    const setup: MatchSetup = {
+      players: playerCount.value,
+      bots: bots.length,
+      groupSize: groupSize.value,
+      flush: flush.value,
+    }
+
+    trackMatchCreated(setup, colorName.value)
+
+    // Full the moment it is written, and so begun by the same write
+    if (withBots) {
+      trackMatchStarted(setup)
+    }
+
     await router.push({
       name: 'match',
       params: {
@@ -391,6 +438,7 @@ async function runCreate(withBots: boolean): Promise<void> {
     error.value = describe(reason)
     busy.value = false
     pressed.value = 'none'
+    trackAppError('create')
   }
 }
 
@@ -404,15 +452,32 @@ async function runCreate(withBots: boolean): Promise<void> {
  * is left to the caller, because it belongs beside whichever of the two was
  * used.
  * @param match - The match's code, already normalised
+ * @param method - Which of the two ways in was used, for the report
  * @returns Why the seat was refused, or an empty string if it was taken
  */
-async function takeSeat(match: string): Promise<string> {
+async function takeSeat(match: string, method: JoinMethod): Promise<string> {
   busy.value = true
   pressed.value = 'none'
   remember(trimmedName.value, playerColor.value)
 
   try {
-    await MatchClient.join(match, trimmedName.value, playerColor.value)
+    const outcome = await MatchClient.join(match, trimmedName.value, playerColor.value)
+
+    // A match that waits for people never has a bot in it
+    const setup: MatchSetup = {
+      players: outcome.playerCount,
+      bots: 0,
+      groupSize: outcome.groupSize,
+      flush: outcome.flush,
+    }
+
+    if (outcome.seated) {
+      trackMatchJoined(method, setup)
+    }
+
+    if (outcome.started) {
+      trackMatchStarted(setup)
+    }
 
     await router.push({
       name: 'match',
@@ -452,7 +517,7 @@ async function runJoin(): Promise<void> {
   }
 
   const refusal = known
-    ? await takeSeat(typed)
+    ? await takeSeat(typed, 'code')
     : 'No match with that code.'
 
   if (refusal === '') {
@@ -460,6 +525,7 @@ async function runJoin(): Promise<void> {
   }
 
   error.value = refusal
+  trackJoinFailed('code', joinRefusal(refusal))
 
   // The code is the only thing here that can be wrong, and a join that began on
   // its last character took the caret out of it. It goes back.
@@ -483,10 +549,14 @@ async function runTakeSeat(match: OpenMatch): Promise<void> {
   error.value = ''
   seatingCode.value = match.code
 
-  const refusal = await takeSeat(match.code)
+  const refusal = await takeSeat(match.code, 'open_list')
 
   seatingCode.value = ''
   error.value = refusal
+
+  if (refusal !== '') {
+    trackJoinFailed('open_list', joinRefusal(refusal))
+  }
 }
 
 /**
@@ -551,6 +621,7 @@ async function runPaste(): Promise<void> {
 
   if (held === null) {
     error.value = 'Could not read the clipboard.'
+    trackAppError('clipboard')
 
     return
   }
@@ -559,6 +630,7 @@ async function runPaste(): Promise<void> {
 
   if (!isMatchCode(pasted)) {
     error.value = 'The clipboard does not hold a match code.'
+    trackAppError('clipboard')
 
     return
   }
@@ -956,7 +1028,7 @@ function onPaste(): void {
         type="button"
         class="how"
         :disabled="busy"
-        @click="showRules = true"
+        @click="openRules"
       >
         How to play
       </button>

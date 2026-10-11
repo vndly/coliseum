@@ -15,6 +15,15 @@ import {computed,
   useTemplateRef,
   watch} from 'vue'
 import {onBeforeRouteLeave, useRoute, useRouter} from 'vue-router'
+import {trackAppError,
+  trackAudioToggled,
+  trackCodeCopied,
+  trackEmoteSent,
+  trackMatchFinished,
+  trackMatchLeft,
+  trackMatchResult,
+  trackRulesOpened} from '@/analytics/analytics'
+import type {MatchSetup} from '@/analytics/analytics'
 import {MatchAudio} from '@/audio/match_audio'
 import DieFace from '@/components/die_face.vue'
 import RulesSheet from '@/components/rules_sheet.vue'
@@ -174,6 +183,9 @@ let screenWakeLock: WakeLockSentinel | null = null // What is keeping the device
 let askingScreenAwake = false // Whether a request for that lock is already in the air
 let lossSoundPlayed = false // A player can see both defeat notices, but only hears the first
 let endSoundPlayed = false // A leave question can hide and reveal the match-over card
+let playStartedAt: number | null = null // When this view saw play begin, on the monotonic clock
+let watchedPlay = false // Whether this view has seen the match in play with this player still in it
+let resultReported = false // How the match ended for this player has been reported
 
 const state = shallowRef<MatchState | null>(null)
 const uid = ref('')
@@ -650,9 +662,23 @@ watch(noticeShowing, (showing) => {
 
 // Music belongs to play rather than to the waiting room, and is left running
 // through the final card so that the end of the match does not turn silent.
+//
+// Play is also timed from here, from the first turn: a view arriving once a
+// throw has been made, by reload or by a slow first read, has no honest start
+// to count from and reports no duration at all. One arriving during the first
+// turn still counts from its own arrival, so its duration comes up short by
+// however long that turn had already run.
 watch(playing, (started) => {
   if (started) {
     matchAudio.startMusic()
+
+    if (!eliminated.value) {
+      watchedPlay = true
+    }
+
+    if (playStartedAt === null && state.value?.throwSeq === 0) {
+      playStartedAt = performance.now()
+    }
   }
 })
 
@@ -665,6 +691,7 @@ watch(showLoss, (showing) => {
 
   matchAudio.playLost()
   lossSoundPlayed = true
+  reportResult('out')
 })
 
 // A leave question can stand over the final card and uncover it again. The
@@ -678,9 +705,11 @@ watch(showEnd, (showing) => {
 
   if (match.winner === uid.value) {
     matchAudio.playWin()
+    reportResult('win')
   } else if (!lossSoundPlayed) {
     matchAudio.playLost()
     lossSoundPlayed = true
+    reportResult('out')
   }
 
   endSoundPlayed = true
@@ -688,6 +717,59 @@ watch(showEnd, (showing) => {
 
 function describe(reason: unknown): string {
   return reason instanceof Error ? reason.message : 'Something went wrong. Try again.'
+}
+
+/**
+ * What the match plays by, for the reports that carry it.
+ * @param match - The match as it stands
+ * @returns Its seats, bots and rules
+ */
+function setupOf(match: MatchState): MatchSetup {
+  return {
+    players: match.playerCount,
+    bots: match.players.filter((player) => player.bot).length,
+    groupSize: match.groupSize,
+    flush: match.flush,
+  }
+}
+
+/**
+ * Reports how the match ended for this player, once.
+ *
+ * Only from a view that saw this player still in the match: a match reopened
+ * after they ran out, or after it finished, puts its card back up, and that is
+ * the same ending a second time.
+ * @param result - Whether they won it, or ran out of dice
+ */
+function reportResult(result: 'win' | 'out'): void {
+  const match = state.value
+
+  if (resultReported || !watchedPlay || match === null) {
+    return
+  }
+
+  resultReported = true
+  trackMatchResult(result, match.throwSeq)
+}
+
+/**
+ * Reports the match won, from the browser whose verdict named the winner.
+ * @param seq - The throw that won it, which is also how many there were
+ * @param winner - The seat that won, or null when this verdict was not the one that ended it
+ */
+function reportFinished(seq: number, winner: string | null): void {
+  const match = state.value
+
+  if (winner === null || match === null) {
+    return
+  }
+
+  const seconds = playStartedAt === null
+    ? null
+    : Math.round((performance.now() - playStartedAt) / 1000)
+  const winnerBot = match.players.find((player) => player.uid === winner)?.bot === true
+
+  trackMatchFinished(setupOf(match), seq, seconds, winnerBot)
 }
 
 function seatedName(seat: number): string {
@@ -708,6 +790,7 @@ async function runCopy(): Promise<void> {
     await navigator.clipboard.writeText(code)
 
     copyResult.value = 'done'
+    trackCodeCopied()
   } catch {
     copyResult.value = 'failed'
   }
@@ -737,6 +820,7 @@ function onLost(reason: unknown): void {
   unreadable.value = true
   state.value = null
   error.value = describe(reason)
+  trackAppError('match_lost')
 }
 
 /**
@@ -747,6 +831,7 @@ function onLost(reason: unknown): void {
  */
 function onSnag(reason: unknown): void {
   error.value = describe(reason)
+  trackAppError('throws_feed')
 }
 
 /**
@@ -921,6 +1006,7 @@ function onLaunch(launches: ThrowLaunch[]): void {
     busy.value = false
     writing.value = false
     error.value = describe(reason)
+    trackAppError('throw')
   })
 }
 
@@ -953,8 +1039,12 @@ function onSettled(): void {
     // over a slow connection the dice can stop before that write has landed.
     pendingThrow
       .then(() => connected.submitVerdict(seq, bowl, thrower))
+      .then((winner) => {
+        reportFinished(seq, winner)
+      })
       .catch((reason: unknown) => {
         error.value = describe(reason)
+        trackAppError('verdict')
       })
 
     return
@@ -1041,9 +1131,16 @@ function runTakeover(): void {
   armTakeover(TAKEOVER_RETRY_MILLISECONDS)
 
   // Nobody here threw this one, so the turn is handed on for whoever did
-  connected.submitVerdict(awaitingSeq, scene.bowlSnapshot, null).catch((reason: unknown) => {
-    error.value = describe(reason)
-  })
+  const seq = awaitingSeq
+
+  connected.submitVerdict(seq, scene.bowlSnapshot, null)
+    .then((winner) => {
+      reportFinished(seq, winner)
+    })
+    .catch((reason: unknown) => {
+      error.value = describe(reason)
+      trackAppError('verdict')
+    })
 }
 
 /**
@@ -1071,6 +1168,7 @@ function runBotTurn(): void {
   if (move === 'pass') {
     connected.pass(match).catch((reason: unknown) => {
       error.value = describe(reason)
+      trackAppError('pass')
     })
 
     return
@@ -1163,6 +1261,7 @@ function onPass(): void {
 
   connected.pass(match).catch((reason: unknown) => {
     error.value = describe(reason)
+    trackAppError('pass')
   })
 }
 
@@ -1171,6 +1270,7 @@ function onToggleMusic(): void {
 
   matchAudio.setMusicEnabled(enabled)
   musicEnabled.value = enabled
+  trackAudioToggled('music', enabled)
 }
 
 function onToggleEffects(): void {
@@ -1178,6 +1278,7 @@ function onToggleEffects(): void {
 
   matchAudio.setEffectsEnabled(enabled)
   effectsEnabled.value = enabled
+  trackAudioToggled('effects', enabled)
 }
 
 /**
@@ -1282,9 +1383,11 @@ function onSendEmote(sent: number): void {
 
   showEmote(seat, sent)
   startEmoteCooldown()
+  trackEmoteSent(emote(sent).name)
 
   connected.sendEmote(sent, seat.uid).catch((reason: unknown) => {
     error.value = describe(reason)
+    trackAppError('emote')
   })
 }
 
@@ -1391,6 +1494,11 @@ function onStay(): void {
   acknowledgedEnd.value = true
 }
 
+function openRules(): void {
+  showRules.value = true
+  trackRulesOpened('match')
+}
+
 /**
  * Puts the rules away and gives the fitting that opened them the keyboard back.
  *
@@ -1425,6 +1533,8 @@ function onCancelLeave(): void {
 function onLeave(): void {
   leaveAllowed = true
   showLeave.value = false
+
+  trackMatchLeft(inLobby.value ? 'waiting' : finished.value ? 'finished' : 'playing', eliminated.value)
 
   void router.replace({
     name: 'home',
@@ -1533,6 +1643,7 @@ async function connect(): Promise<void> {
     opened.listen(onState, onThrow, onEmote, onLost, onSnag)
   } catch (reason: unknown) {
     error.value = describe(reason)
+    trackAppError('connection')
   }
 }
 
@@ -1765,6 +1876,7 @@ onMounted(() => {
 
   scene.onPhysicsFailed = (reason: unknown) => {
     error.value = describe(reason)
+    trackAppError('physics')
   }
 
   scene.start()
@@ -1883,7 +1995,7 @@ onBeforeUnmount(() => {
             class="fitting__button"
             aria-label="How to play"
             title="How to play"
-            @click="showRules = true"
+            @click="openRules"
           >
             <svg class="fitting__icon" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M8.6 9.4a3.4 3.4 0 1 1 3.4 3.4v1.7" />

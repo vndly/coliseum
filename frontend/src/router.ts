@@ -3,6 +3,7 @@
  * History mode — the server must rewrite all paths to /index.html.
  */
 import {createRouter, createWebHistory} from 'vue-router'
+import {trackScreen} from '@/analytics/analytics'
 import LobbyScreen from '@/components/screens/lobby_screen.vue'
 import MatchScreen from '@/components/screens/match_screen.vue'
 
@@ -22,6 +23,15 @@ const router = createRouter({
       component: MatchScreen,
     },
   ],
+})
+
+// Reported once the screen has actually changed. A navigation the match screen
+// turns back, to ask whether the player means to leave, passes through here too
+// and is told apart by its failure.
+router.afterEach((to, _, failure) => {
+  if (failure === undefined) {
+    trackScreen(to.name === 'match' ? 'match' : 'lobby')
+  }
 })
 
 export default router
