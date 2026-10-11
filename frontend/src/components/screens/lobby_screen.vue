@@ -720,9 +720,8 @@ function onPaste(): void {
 
 <template>
   <main class="lobby" :inert="behindRules">
-    <!-- The wordmark and the cards as one block, which is what the arena
-         behind them is measured against: whatever is on the screen, this
-         is the whole of it, and the dark of the arena is fitted to it -->
+    <!-- The wordmark and the cards as one block, centred on the screen as a
+         whole: whatever is on the screen, this is the whole of it -->
     <div class="lobby__stage">
       <header class="lobby__head">
         <h1 class="lobby__wordmark">
@@ -1057,17 +1056,13 @@ function onPaste(): void {
     min-height: 100%;
     padding: 2rem 1.25rem;
 
-    /* The arena runs past the screen on every side, and none of that may reach
-       the page's scroll. Isolated so the arena is laid over this ground rather
-       than under it, which is where a layer pushed behind its siblings would
-       otherwise go */
-    overflow: hidden;
+    /* Isolated so the arena is laid over this ground rather than under it,
+       which is where a layer pushed behind its siblings would otherwise go */
     isolation: isolate;
     background: var(--ground);
 }
 
 .lobby__stage {
-    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -1075,22 +1070,20 @@ function onPaste(): void {
     width: 100%;
 }
 
-/* The arena, hung so its dark floor stands behind the whole stage. The figures
-   are measured off the picture: the dark patch is centred 51% across and 47%
-   down it, and is 57% of its height, so it is hung by that point from the
-   middle of the stage and made tall enough for the patch to clear the stage
-   with air to spare at both ends — however long the list of open matches makes
-   it. The other two floors are the screen's: tall enough that the 47% above
-   that point still reaches the top edge, and wide enough that the 49% right of
-   it reaches the right one. The match screen hangs its waiting card the same
-   way */
-.lobby__stage::before {
+/* The arena, pinned to the screen: it keeps one size and one place however
+   long the list of open matches makes the stage, which scrolls over it rather
+   than stretching it. The figures are measured off the picture: the dark patch
+   is centred 51% across and 47% down it, so it is hung by that point from the
+   middle of the screen, tall enough that the 47% above that point still
+   reaches the top edge, and wide enough that the 49% right of it reaches the
+   right one. The match screen hangs the arena behind its wait the same way */
+.lobby::before {
     content: '';
-    position: absolute;
+    position: fixed;
     top: 50%;
     left: 50%;
     z-index: -1;
-    height: max(190%, 107vh, 57.6vw);
+    height: max(107vh, 57.6vw);
     aspect-ratio: 1672 / 941;
     background: url('@/assets/background.jpg') center / cover;
     transform: translate(-51%, -47%);

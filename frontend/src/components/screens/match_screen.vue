@@ -2557,9 +2557,9 @@ onBeforeUnmount(() => {
    Waiting for the seats to fill
    ============================================ */
 
-/* At least the screen, and longer when the card is: the arena is cut off at
-   this layer's edge, so a card of six seats on a phone turned on its side has
-   to make the layer longer rather than be cut off with it */
+/* At least the screen, and longer when the card is, so a card of six seats on
+   a phone turned on its side makes the page scroll rather than spilling past
+   the top of the screen, where no scroll reaches */
 .waiting {
     position: absolute;
     inset: 0 0 auto;
@@ -2569,17 +2569,14 @@ onBeforeUnmount(() => {
     min-height: 100%;
     padding: 1.25rem;
 
-    /* The arena stands over the bowl for the whole of the wait, and runs past
-       the screen on every side. Isolated so the arena is laid over this ground
-       rather than under it, which is where a layer pushed behind its siblings
-       would otherwise go */
-    overflow: hidden;
+    /* The arena stands over the bowl for the whole of the wait. Isolated so
+       the arena is laid over this ground rather than under it, which is where
+       a layer pushed behind its siblings would otherwise go */
     isolation: isolate;
     background: var(--ground);
 }
 
 .waiting__card {
-    position: relative;
     width: 100%;
     max-width: 22rem;
     padding: 1.75rem;
@@ -2592,18 +2589,17 @@ onBeforeUnmount(() => {
         0 1.5rem 3rem rgb(0 0 0 / 45%);
 }
 
-/* The arena the lobby is drawn over, hung from the card by the same figures
-   and for the same reason: the dark patch at its middle is centred 51% across
-   and 47% down the picture and is 57% of its height, so the card stands inside
-   it however many seats it lists, and the screen's two floors keep every edge
+/* The arena the lobby is drawn over, pinned to the screen by the same figures
+   and for the same reason: it keeps one size however many seats the card
+   lists, with its dark patch at the middle of the screen and every edge
    covered */
-.waiting__card::before {
+.waiting::before {
     content: '';
-    position: absolute;
+    position: fixed;
     top: 50%;
     left: 50%;
     z-index: -1;
-    height: max(190%, 107vh, 57.6vw);
+    height: max(107vh, 57.6vw);
     aspect-ratio: 1672 / 941;
     background: url('@/assets/background.jpg') center / cover;
     transform: translate(-51%, -47%);
