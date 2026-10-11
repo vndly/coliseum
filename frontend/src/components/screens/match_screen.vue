@@ -643,11 +643,13 @@ watch(botTurnKey, (key) => {
 })
 
 // Focus is moved into a card as it opens, so that the keyboard is inside the
-// question being asked rather than left on the layer just shut behind it. The
-// rules are put away first: they are the one layer here that was opened rather
-// than raised by the match, and a card arriving under them — the back button,
-// the last of this player's dice, the match itself ending — is a question that
-// owns the screen.
+// question being asked rather than left on the layer just shut behind it. Onto
+// the card itself rather than its first answer: a card raised by Escape would
+// otherwise open with that answer lit as though it had already been chosen, and
+// the answers are one Tab away from the card. The rules are put away first: they
+// are the one layer here that was opened rather than raised by the match, and a
+// card arriving under them — the back button, the last of this player's dice,
+// the match itself ending — is a question that owns the screen.
 watch(noticeShowing, (showing) => {
   if (!showing) {
     return
@@ -656,7 +658,7 @@ watch(noticeShowing, (showing) => {
   showRules.value = false
 
   void nextTick(() => {
-    notice.value?.querySelector('button')?.focus()
+    notice.value?.querySelector<HTMLElement>('.notice__card')?.focus()
   })
 })
 
@@ -2319,6 +2321,7 @@ onBeforeUnmount(() => {
       <div
         v-if="showLeave"
         class="notice__card"
+        tabindex="-1"
         role="dialog"
         aria-modal="true"
         aria-labelledby="leave-heading"
@@ -2339,6 +2342,7 @@ onBeforeUnmount(() => {
       <div
         v-else-if="showLoss"
         class="notice__card"
+        tabindex="-1"
         role="dialog"
         aria-modal="true"
         aria-labelledby="loss-heading"
@@ -2354,6 +2358,7 @@ onBeforeUnmount(() => {
       <div
         v-else-if="showEnd"
         class="notice__card"
+        tabindex="-1"
         role="dialog"
         aria-modal="true"
         aria-labelledby="winner-heading"
@@ -2380,6 +2385,7 @@ onBeforeUnmount(() => {
       <div
         v-else
         class="notice__card"
+        tabindex="-1"
         role="dialog"
         aria-modal="true"
         aria-labelledby="unreadable-heading"
@@ -3304,6 +3310,12 @@ onBeforeUnmount(() => {
     box-shadow:
         inset 0 1px 0 rgb(200 164 104 / 18%),
         0 1.5rem 3rem rgb(0 0 0 / 45%);
+}
+
+/* Holds the focus only so the keyboard starts inside the question, and is not
+   itself something to press, so it is not ringed as though it were */
+.notice__card:focus-visible {
+    outline: none;
 }
 
 .notice__line {

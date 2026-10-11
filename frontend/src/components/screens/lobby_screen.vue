@@ -1161,25 +1161,30 @@ function onPaste(): void {
     max-width: 24rem;
 }
 
-/* The one control on the screen with no rim and no surface: everything above
-   it is somewhere to sit down, and this is a footnote to the lot of them. Set
-   in the stack rather than beside it, so it is cut to the same width and falls
-   under whichever card was last — and half a card's gap further down, since it
-   belongs to neither. */
+/* Set into the ground the way the match screen's fittings are, rim and all,
+   which is where the same sheet is opened from once a match has begun: bare
+   words at this size are lost on the lit floor of the arena behind them. Set
+   in the stack rather than beside it, so it falls under whichever card was
+   last — and half a card's gap further down, since it belongs to neither. */
 .how {
     align-self: center;
     margin-top: 0.5rem;
-    padding: 0.375rem 0.5rem;
-    border: 0;
-    background: transparent;
+    padding: 0.5rem 1.125rem;
+    border: 1px solid var(--brass-edge);
+    border-radius: 999px;
+    background: rgb(18 11 6 / 78%);
     font-size: 0.8125rem;
-    color: var(--bone-dim);
+    font-weight: 600;
+    color: var(--brass);
     cursor: pointer;
+    box-shadow:
+        inset 0 1px 0 rgb(200 164 104 / 18%),
+        0 0.5rem 1.25rem rgb(0 0 0 / 24%);
     transition: color 160ms ease;
 }
 
 .how:hover:not(:disabled) {
-    color: var(--brass);
+    color: var(--bone);
 }
 
 .card {
