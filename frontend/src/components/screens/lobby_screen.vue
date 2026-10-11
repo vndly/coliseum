@@ -720,322 +720,327 @@ function onPaste(): void {
 
 <template>
   <main class="lobby" :inert="behindRules">
-    <header class="lobby__head">
-      <h1 class="lobby__wordmark">
-        <span class="lobby__laurel" aria-hidden="true" />
-        <span class="lobby__word">Coliseum</span>
-        <span class="lobby__laurel lobby__laurel--right" aria-hidden="true" />
-      </h1>
-    </header>
+    <!-- The wordmark and the cards as one block, which is what the arena
+         behind them is measured against: whatever is on the screen, this
+         is the whole of it, and the dark of the arena is fitted to it -->
+    <div class="lobby__stage">
+      <header class="lobby__head">
+        <h1 class="lobby__wordmark">
+          <span class="lobby__laurel" aria-hidden="true" />
+          <span class="lobby__word">Coliseum</span>
+          <span class="lobby__laurel lobby__laurel--right" aria-hidden="true" />
+        </h1>
+      </header>
 
-    <div class="lobby__cards">
-      <!-- Out on its own, above the switch rather than under it. A name is
-           asked once and stands for both ways in, so inside the form it read as
-           part of whichever half was showing. The form attribute keeps it a
-           field of that form across the gap all the same, so Enter here still
-           presses whatever the card below is offering. -->
-      <section class="card">
-        <div class="field">
-          <label class="field__label" for="player-name">Your name</label>
+      <div class="lobby__cards">
+        <!-- Out on its own, above the switch rather than under it. A name is
+             asked once and stands for both ways in, so inside the form it read as
+             part of whichever half was showing. The form attribute keeps it a
+             field of that form across the gap all the same, so Enter here still
+             presses whatever the card below is offering. -->
+        <section class="card">
+          <div class="field">
+            <label class="field__label" for="player-name">Your name</label>
 
-          <!-- The colour sits on the row with the name because it is the other
-               half of the same answer: who you are at this table, and which
-               dice on it are yours. It is a die rather than a chip, in the
-               colour and with the pip the real ones will carry, so what is
-               being chosen is shown rather than described. -->
-          <div class="named">
-            <input
-              id="player-name"
-              ref="nameField"
-              v-model="playerName"
-              class="field__input"
-              type="text"
-              form="lobby-form"
-              :maxlength="NAME_LIMIT"
-              :disabled="busy"
-              autocomplete="nickname"
-            >
-
-            <div ref="picker" class="picker">
-              <button
-                ref="pickerButton"
-                type="button"
-                class="picker__button"
-                :class="{'picker__button--open': picking}"
-                :aria-label="`Dice colour: ${colorName}`"
-                :aria-expanded="picking"
+            <!-- The colour sits on the row with the name because it is the other
+                 half of the same answer: who you are at this table, and which
+                 dice on it are yours. It is a die rather than a chip, in the
+                 colour and with the pip the real ones will carry, so what is
+                 being chosen is shown rather than described. -->
+            <div class="named">
+              <input
+                id="player-name"
+                ref="nameField"
+                v-model="playerName"
+                class="field__input"
+                type="text"
+                form="lobby-form"
+                :maxlength="NAME_LIMIT"
                 :disabled="busy"
-                @click="picking = !picking"
-                @keydown.esc="closePalette"
+                autocomplete="nickname"
               >
-                <DieFace :value="1" :skin="playerColor" />
-              </button>
 
-              <ul v-if="picking" class="palette" @keydown.esc="closePalette">
-                <li v-for="skin in SWATCH_ORDER" :key="skin">
-                  <button
-                    type="button"
-                    class="palette__option"
-                    :class="{'palette__option--taken': skin === playerColor}"
-                    :aria-label="dieSkin(skin).name"
-                    :aria-pressed="skin === playerColor"
-                    :disabled="busy"
-                    @click="onPickColor(skin)"
-                  >
-                    <DieFace :value="1" :skin="skin" />
-                  </button>
-                </li>
-              </ul>
+              <div ref="picker" class="picker">
+                <button
+                  ref="pickerButton"
+                  type="button"
+                  class="picker__button"
+                  :class="{'picker__button--open': picking}"
+                  :aria-label="`Dice colour: ${colorName}`"
+                  :aria-expanded="picking"
+                  :disabled="busy"
+                  @click="picking = !picking"
+                  @keydown.esc="closePalette"
+                >
+                  <DieFace :value="1" :skin="playerColor" />
+                </button>
+
+                <ul v-if="picking" class="palette" @keydown.esc="closePalette">
+                  <li v-for="skin in SWATCH_ORDER" :key="skin">
+                    <button
+                      type="button"
+                      class="palette__option"
+                      :class="{'palette__option--taken': skin === playerColor}"
+                      :aria-label="dieSkin(skin).name"
+                      :aria-pressed="skin === playerColor"
+                      :disabled="busy"
+                      @click="onPickColor(skin)"
+                    >
+                      <DieFace :value="1" :skin="skin" />
+                    </button>
+                  </li>
+                </ul>
+              </div>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <!-- Only in the page while somebody is waiting in something. A match with
-           a seat still open is quicker than either half of the card below, so it
-           sits above it — and when there is none, the two cards close back up as
-           though this one had never been there. -->
-      <section v-if="openMatches.length > 0" class="card card--matches">
-        <p class="field__label">Open matches</p>
+        <!-- Only in the page while somebody is waiting in something. A match with
+             a seat still open is quicker than either half of the card below, so it
+             sits above it — and when there is none, the two cards close back up as
+             though this one had never been there. -->
+        <section v-if="openMatches.length > 0" class="card card--matches">
+          <p class="field__label">Open matches</p>
 
-        <ul class="matches">
-          <li v-for="match in openMatches" :key="match.code">
+          <ul class="matches">
+            <li v-for="match in openMatches" :key="match.code">
+              <button
+                type="button"
+                class="match"
+                :class="{'match--busy': seatingCode === match.code}"
+                :aria-label="seatLine(match)"
+                :disabled="!canTakeSeat"
+                @click="onTakeSeat(match)"
+              >
+                <span class="match__column">
+                  <span class="match__host">
+                    {{ isSeated(match) ? 'Your match' : match.host }}
+                  </span>
+                  <span class="match__detail">
+                    Players {{ match.seatsTaken }}/{{ match.seatsTotal }}
+                  </span>
+                </span>
+
+                <!-- The rules the creator settled for this table — until this is
+                     the row being joined, when what is happening takes their place -->
+                <span v-if="seatingCode === match.code" class="match__word">Joining…</span>
+
+                <span v-else class="match__column match__column--rules">
+                  <span class="match__detail">Groups: {{ match.groupSize }}</span>
+                  <span class="match__detail">Flush: {{ match.flush ? 'ON' : 'OFF' }}</span>
+                </span>
+              </button>
+            </li>
+          </ul>
+
+          <p v-if="trimmedName === ''" class="hint">Type your name to take a seat</p>
+        </section>
+
+        <section class="card">
+          <div class="switch" role="group" aria-label="Start or join">
             <button
               type="button"
-              class="match"
-              :class="{'match--busy': seatingCode === match.code}"
-              :aria-label="seatLine(match)"
-              :disabled="!canTakeSeat"
-              @click="onTakeSeat(match)"
+              class="switch__option"
+              :class="{'switch__option--on': mode === 'create'}"
+              :aria-pressed="mode === 'create'"
+              :disabled="busy"
+              @click="chooseMode('create')"
             >
-              <span class="match__column">
-                <span class="match__host">
-                  {{ isSeated(match) ? 'Your match' : match.host }}
-                </span>
-                <span class="match__detail">
-                  Players {{ match.seatsTaken }}/{{ match.seatsTotal }}
-                </span>
-              </span>
-
-              <!-- The rules the creator settled for this table — until this is
-                   the row being joined, when what is happening takes their place -->
-              <span v-if="seatingCode === match.code" class="match__word">Joining…</span>
-
-              <span v-else class="match__column match__column--rules">
-                <span class="match__detail">Groups: {{ match.groupSize }}</span>
-                <span class="match__detail">Flush: {{ match.flush ? 'ON' : 'OFF' }}</span>
-              </span>
+              Create match
             </button>
-          </li>
-        </ul>
+            <button
+              type="button"
+              class="switch__option"
+              :class="{'switch__option--on': mode === 'join'}"
+              :aria-pressed="mode === 'join'"
+              :disabled="busy"
+              @click="chooseMode('join')"
+            >
+              Join a match
+            </button>
+          </div>
 
-        <p v-if="trimmedName === ''" class="hint">Type your name to take a seat</p>
-      </section>
+          <form id="lobby-form" class="form" @submit.prevent>
+            <template v-if="mode === 'create'">
+              <!-- A group rather than a fieldset: a legend is taken out of its
+                   parent's flex flow, and lands on top of the dice -->
+              <div class="field" role="group" aria-label="Players">
+                <span class="field__label" aria-hidden="true">Players</span>
+                <div class="counts">
+                  <button
+                    v-for="count in seatCounts"
+                    :key="count"
+                    type="button"
+                    class="counts__option"
+                    :class="{'counts__option--on': playerCount === count}"
+                    :aria-pressed="playerCount === count"
+                    :aria-label="`${count} players`"
+                    :disabled="busy"
+                    @click="playerCount = count"
+                  >
+                    <DieFace :value="count" :lit="playerCount === count" />
+                  </button>
+                </div>
+              </div>
 
-      <section class="card">
-        <div class="switch" role="group" aria-label="Start or join">
-          <button
-            type="button"
-            class="switch__option"
-            :class="{'switch__option--on': mode === 'create'}"
-            :aria-pressed="mode === 'create'"
-            :disabled="busy"
-            @click="chooseMode('create')"
-          >
-            Create match
-          </button>
-          <button
-            type="button"
-            class="switch__option"
-            :class="{'switch__option--on': mode === 'join'}"
-            :aria-pressed="mode === 'join'"
-            :disabled="busy"
-            @click="chooseMode('join')"
-          >
-            Join a match
-          </button>
-        </div>
+              <!-- The two rules on one row, and each answered in its own way.
+                   A group is dice that agree, so it is shown: a single die
+                   reading two or three would be the face two and the face three,
+                   not two dice and three. The flush has no such picture — what
+                   is being switched off is a hand, and a hand nobody plays
+                   cannot be drawn — so it is named on the same switch the card
+                   above uses to choose between creating and joining. -->
+              <div class="rules">
+                <div class="field" role="group" aria-label="Groups">
+                  <span class="field__label" aria-hidden="true">Groups</span>
 
-        <form id="lobby-form" class="form" @submit.prevent>
-          <template v-if="mode === 'create'">
-            <!-- A group rather than a fieldset: a legend is taken out of its
-                 parent's flex flow, and lands on top of the dice -->
-            <div class="field" role="group" aria-label="Players">
-              <span class="field__label" aria-hidden="true">Players</span>
-              <div class="counts">
+                  <!-- Cut into the card apart from each other, because a pair set
+                       beside a triple on an open row is one line of five dice -->
+                  <div class="groups">
+                    <button
+                      v-for="size in GROUP_SIZES"
+                      :key="size"
+                      type="button"
+                      class="groups__option"
+                      :class="{'groups__option--on': groupSize === size}"
+                      :aria-pressed="groupSize === size"
+                      :aria-label="`Groups of ${size}`"
+                      :disabled="busy"
+                      @click="groupSize = size"
+                    >
+                      <DieFace
+                        v-for="die in size"
+                        :key="die"
+                        :value="GROUP_FACE"
+                        :lit="groupSize === size"
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                <div class="field field--flush" role="group" aria-label="Flush">
+                  <span class="field__label" aria-hidden="true">Flush</span>
+                  <div class="switch switch--flush">
+                    <button
+                      type="button"
+                      class="switch__option switch__option--brass"
+                      :class="{'switch__option--on': flush}"
+                      :aria-pressed="flush"
+                      :disabled="busy"
+                      @click="flush = true"
+                    >
+                      On
+                    </button>
+                    <button
+                      type="button"
+                      class="switch__option"
+                      :class="{'switch__option--on': !flush}"
+                      :aria-pressed="!flush"
+                      :disabled="busy"
+                      @click="flush = false"
+                    >
+                      Off
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Two ways to start the same match, side by side rather than
+                   stacked: the dice above are stood to the height of the code
+                   field so that swapping the halves of the card never moves this
+                   row, and a second button under the first would undo that. -->
+              <div class="actions">
                 <button
-                  v-for="count in seatCounts"
-                  :key="count"
-                  type="button"
-                  class="counts__option"
-                  :class="{'counts__option--on': playerCount === count}"
-                  :aria-pressed="playerCount === count"
-                  :aria-label="`${count} players`"
-                  :disabled="busy"
-                  @click="playerCount = count"
+                  type="submit"
+                  class="action"
+                  :class="{'action--busy': creatingMatch}"
+                  :disabled="!canCreate"
+                  @click="onCreate"
                 >
-                  <DieFace :value="count" :lit="playerCount === count" />
+                  {{ creatingMatch ? 'Creating…' : 'Create match' }}
+                </button>
+
+                <button
+                  type="button"
+                  class="action action--quiet"
+                  :class="{'action--busy': startingBots}"
+                  :disabled="!canCreate"
+                  @click="onPlayBots"
+                >
+                  {{ startingBots ? 'Starting…' : 'Play with bots' }}
                 </button>
               </div>
-            </div>
+            </template>
 
-            <!-- The two rules on one row, and each answered in its own way.
-                 A group is dice that agree, so it is shown: a single die
-                 reading two or three would be the face two and the face three,
-                 not two dice and three. The flush has no such picture — what
-                 is being switched off is a hand, and a hand nobody plays
-                 cannot be drawn — so it is named on the same switch the card
-                 above uses to choose between creating and joining. -->
-            <div class="rules">
-              <div class="field" role="group" aria-label="Groups">
-                <span class="field__label" aria-hidden="true">Groups</span>
+            <template v-else>
+              <!-- Not a label wrapped round its input like the name above: a label
+                   may hold one labelable element, and the paste button is a second -->
+              <div class="field">
+                <label class="field__label" for="match-code">Match code</label>
 
-                <!-- Cut into the card apart from each other, because a pair set
-                     beside a triple on an open row is one line of five dice -->
-                <div class="groups">
-                  <button
-                    v-for="size in GROUP_SIZES"
-                    :key="size"
-                    type="button"
-                    class="groups__option"
-                    :class="{'groups__option--on': groupSize === size}"
-                    :aria-pressed="groupSize === size"
-                    :aria-label="`Groups of ${size}`"
+                <div class="code">
+                  <!-- Bound through a handler rather than with v-model, and
+                       with no length cap of its own: both the normalisation and
+                       the cap are applied to what was typed, in that order -->
+                  <input
+                    id="match-code"
+                    ref="codeField"
+                    class="field__input field__input--code"
+                    type="text"
+                    :value="code"
                     :disabled="busy"
-                    @click="groupSize = size"
+                    autocapitalize="characters"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="K7QM"
+                    @input="onCodeInput"
                   >
-                    <DieFace
-                      v-for="die in size"
-                      :key="die"
-                      :value="GROUP_FACE"
-                      :lit="groupSize === size"
-                    />
+
+                  <button
+                    v-if="code.trim() === ''"
+                    type="button"
+                    class="paste"
+                    aria-label="Paste the code"
+                    :disabled="busy"
+                    @click="onPaste"
+                  >
+                    <svg class="paste__icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <rect x="8" y="2" width="8" height="4" rx="1" />
+                      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+                    </svg>
                   </button>
                 </div>
               </div>
 
-              <div class="field field--flush" role="group" aria-label="Flush">
-                <span class="field__label" aria-hidden="true">Flush</span>
-                <div class="switch switch--flush">
-                  <button
-                    type="button"
-                    class="switch__option switch__option--brass"
-                    :class="{'switch__option--on': flush}"
-                    :aria-pressed="flush"
-                    :disabled="busy"
-                    @click="flush = true"
-                  >
-                    On
-                  </button>
-                  <button
-                    type="button"
-                    class="switch__option"
-                    :class="{'switch__option--on': !flush}"
-                    :aria-pressed="!flush"
-                    :disabled="busy"
-                    @click="flush = false"
-                  >
-                    Off
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <!-- Two ways to start the same match, side by side rather than
-                 stacked: the dice above are stood to the height of the code
-                 field so that swapping the halves of the card never moves this
-                 row, and a second button under the first would undo that. -->
-            <div class="actions">
               <button
                 type="submit"
                 class="action"
-                :class="{'action--busy': creatingMatch}"
-                :disabled="!canCreate"
-                @click="onCreate"
+                :class="{'action--busy': formBusy}"
+                :disabled="!canJoin"
+                @click="onJoin"
               >
-                {{ creatingMatch ? 'Creating…' : 'Create match' }}
+                {{ formBusy ? 'Joining…' : 'Join match' }}
               </button>
+            </template>
 
-              <button
-                type="button"
-                class="action action--quiet"
-                :class="{'action--busy': startingBots}"
-                :disabled="!canCreate"
-                @click="onPlayBots"
-              >
-                {{ startingBots ? 'Starting…' : 'Play with bots' }}
-              </button>
-            </div>
-          </template>
+            <p v-if="error" class="error" role="alert">{{ error }}</p>
+          </form>
+        </section>
 
-          <template v-else>
-            <!-- Not a label wrapped round its input like the name above: a label
-                 may hold one labelable element, and the paste button is a second -->
-            <div class="field">
-              <label class="field__label" for="match-code">Match code</label>
-
-              <div class="code">
-                <!-- Bound through a handler rather than with v-model, and
-                     with no length cap of its own: both the normalisation and
-                     the cap are applied to what was typed, in that order -->
-                <input
-                  id="match-code"
-                  ref="codeField"
-                  class="field__input field__input--code"
-                  type="text"
-                  :value="code"
-                  :disabled="busy"
-                  autocapitalize="characters"
-                  autocomplete="off"
-                  spellcheck="false"
-                  placeholder="K7QM"
-                  @input="onCodeInput"
-                >
-
-                <button
-                  v-if="code.trim() === ''"
-                  type="button"
-                  class="paste"
-                  aria-label="Paste the code"
-                  :disabled="busy"
-                  @click="onPaste"
-                >
-                  <svg class="paste__icon" viewBox="0 0 24 24" aria-hidden="true">
-                    <rect x="8" y="2" width="8" height="4" rx="1" />
-                    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              class="action"
-              :class="{'action--busy': formBusy}"
-              :disabled="!canJoin"
-              @click="onJoin"
-            >
-              {{ formBusy ? 'Joining…' : 'Join match' }}
-            </button>
-          </template>
-
-          <p v-if="error" class="error" role="alert">{{ error }}</p>
-        </form>
-      </section>
-
-      <!-- Under both ways in rather than over them, because reading the rules
-           is not part of sitting down. It is the same sheet whichever way in is
-           taken, and somebody who wants it will look for it; somebody who does
-           not should not have to read past it to type their name. -->
-      <button
-        ref="howButton"
-        type="button"
-        class="how"
-        :disabled="busy"
-        @click="openRules"
-      >
-        How to play
-      </button>
+        <!-- Under both ways in rather than over them, because reading the rules
+             is not part of sitting down. It is the same sheet whichever way in is
+             taken, and somebody who wants it will look for it; somebody who does
+             not should not have to read past it to type their name. -->
+        <button
+          ref="howButton"
+          type="button"
+          class="how"
+          :disabled="busy"
+          @click="openRules"
+        >
+          How to play
+        </button>
+      </div>
     </div>
   </main>
 
@@ -1047,18 +1052,49 @@ function onPaste(): void {
 <style scoped>
 .lobby {
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 2.5rem;
     min-height: 100%;
     padding: 2rem 1.25rem;
 
-    /* A pool of warmth behind the cards, as though the one lamp over the table
-       in the scene reached this screen too */
-    background:
-        radial-gradient(120% 90% at 50% 12%, rgb(74 122 96 / 8%), transparent 60%),
-        var(--ground);
+    /* The arena runs past the screen on every side, and none of that may reach
+       the page's scroll. Isolated so the arena is laid over this ground rather
+       than under it, which is where a layer pushed behind its siblings would
+       otherwise go */
+    overflow: hidden;
+    isolation: isolate;
+    background: var(--ground);
+}
+
+.lobby__stage {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2.5rem;
+    width: 100%;
+}
+
+/* The arena, hung so its dark floor stands behind the whole stage. The figures
+   are measured off the picture: the dark patch is centred 51% across and 47%
+   down it, and is 57% of its height, so it is hung by that point from the
+   middle of the stage and made tall enough for the patch to clear the stage
+   with air to spare at both ends — however long the list of open matches makes
+   it. The other two floors are the screen's: tall enough that the 47% above
+   that point still reaches the top edge, and wide enough that the 49% right of
+   it reaches the right one. The match screen hangs its waiting card the same
+   way */
+.lobby__stage::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    z-index: -1;
+    height: max(190%, 107vh, 57.6vw);
+    aspect-ratio: 1672 / 941;
+    background: url('@/assets/background.jpg') center / cover;
+    transform: translate(-51%, -47%);
+    pointer-events: none;
 }
 
 .lobby__head {

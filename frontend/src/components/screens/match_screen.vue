@@ -2557,20 +2557,29 @@ onBeforeUnmount(() => {
    Waiting for the seats to fill
    ============================================ */
 
+/* At least the screen, and longer when the card is: the arena is cut off at
+   this layer's edge, so a card of six seats on a phone turned on its side has
+   to make the layer longer rather than be cut off with it */
 .waiting {
     position: absolute;
-    inset: 0;
+    inset: 0 0 auto;
     display: flex;
     align-items: center;
     justify-content: center;
+    min-height: 100%;
     padding: 1.25rem;
 
-    /* Translucent, so the bowl is already there behind the wait rather than
-       revealed as though it had just been built */
-    background: rgb(14 18 16 / 82%);
+    /* The arena stands over the bowl for the whole of the wait, and runs past
+       the screen on every side. Isolated so the arena is laid over this ground
+       rather than under it, which is where a layer pushed behind its siblings
+       would otherwise go */
+    overflow: hidden;
+    isolation: isolate;
+    background: var(--ground);
 }
 
 .waiting__card {
+    position: relative;
     width: 100%;
     max-width: 22rem;
     padding: 1.75rem;
@@ -2581,6 +2590,24 @@ onBeforeUnmount(() => {
     box-shadow:
         inset 0 1px 0 rgb(200 164 104 / 18%),
         0 1.5rem 3rem rgb(0 0 0 / 45%);
+}
+
+/* The arena the lobby is drawn over, hung from the card by the same figures
+   and for the same reason: the dark patch at its middle is centred 51% across
+   and 47% down the picture and is 57% of its height, so the card stands inside
+   it however many seats it lists, and the screen's two floors keep every edge
+   covered */
+.waiting__card::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    z-index: -1;
+    height: max(190%, 107vh, 57.6vw);
+    aspect-ratio: 1672 / 941;
+    background: url('@/assets/background.jpg') center / cover;
+    transform: translate(-51%, -47%);
+    pointer-events: none;
 }
 
 /* The code and the button that copies it read as one object, so the pair is
