@@ -31,6 +31,7 @@
 
     --font-ui: 'Instrument Sans', system-ui, sans-serif;
     --font-mono: 'Azeret Mono', ui-monospace, monospace;
+    --font-display: 'Cinzel', 'Times New Roman', serif; /* The wordmark's carved capitals, and nothing else */
 
     /* A stamped-plate treatment, used for every label that names a thing
        rather than saying something */

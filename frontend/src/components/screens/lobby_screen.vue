@@ -721,7 +721,11 @@ function onPaste(): void {
 <template>
   <main class="lobby" :inert="behindRules">
     <header class="lobby__head">
-      <h1 class="lobby__wordmark">Coliseum</h1>
+      <h1 class="lobby__wordmark">
+        <span class="lobby__laurel" aria-hidden="true" />
+        <span class="lobby__word">Coliseum</span>
+        <span class="lobby__laurel lobby__laurel--right" aria-hidden="true" />
+      </h1>
     </header>
 
     <div class="lobby__cards">
@@ -1061,15 +1065,60 @@ function onPaste(): void {
     text-align: center;
 }
 
-/* The tracking comes down as the size goes up: what reads as a stamped plate at
-   a caption's size gaps the word into eight loose letters at a title's */
+/* Cast in gold between two laurel branches. The metal is one gradient, with a
+   dark band across the middle where a polished face would catch the floor, cut
+   out both by the letters and by the laurels so the three read as one casting.
+   The shadows go on the whole heading as filters rather than as text shadows,
+   which would be painted over the letters instead of under them: a dark rim
+   that holds the edges against the ground, a short drop, and the glow of the
+   lamp off the metal */
 .lobby__wordmark {
-    font-size: clamp(2.25rem, 11vw, 3rem);
-    font-weight: 700;
-    letter-spacing: 0.16em;
-    text-indent: 0.16em; /* Puts the tracking back inside the centred line */
-    text-transform: uppercase;
+    --gold: linear-gradient(
+        180deg,
+        #fff4d6 0%,
+        #f2c77f 24%,
+        #b9732f 47%,
+        #6b3210 51%,
+        #d99a52 56%,
+        #f7d696 76%,
+        #9c5a24 100%
+    );
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.12em;
+    font-family: var(--font-display);
+    font-size: clamp(2.25rem, 11vw, 3.5rem);
+    font-weight: 800;
+    line-height: 1;
     color: var(--brass);
+    filter:
+        drop-shadow(0 0 1px #2a1205)
+        drop-shadow(0 0.04em 0.03em rgb(0 0 0 / 70%))
+        drop-shadow(0 0 0.3em rgb(224 150 70 / 30%));
+}
+
+.lobby__word {
+    letter-spacing: 0.06em;
+    text-indent: 0.06em; /* Puts the tracking back inside the centred line */
+    text-transform: uppercase;
+    color: transparent;
+    background: var(--gold);
+    -webkit-background-clip: text;
+    background-clip: text;
+}
+
+.lobby__laurel {
+    flex: none;
+    width: 0.6em;
+    height: 1.15em;
+    background: var(--gold);
+    mask: url('@/assets/laurel.svg') center / contain no-repeat;
+}
+
+.lobby__laurel--right {
+    transform: scaleX(-1);
 }
 
 /* The two cards are one stack and are spaced as one, leaving the lobby's own
