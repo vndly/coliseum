@@ -27,6 +27,7 @@ Coliseum (Vite + Vue 3, TypeScript, Composition API with `<script setup>`, ESLin
 
 - **After completing code changes**: Run `npm run lint:fix` and fix remaining errors, run `npm run build` (typechecks first) and fix any failures, then run `/delta-review` before responding.
 - **No test suite**: This project has no tests by design. TypeScript and the type-aware lint rules are the safety net — do not weaken `strict` or `noUncheckedIndexedAccess`, and do not add `any` to silence an error.
+- **Checking in the browser**: Creating a throwaway match in the live database is always allowed, to check anything that needs a match on screen. `npm run dev` talks to the real Firestore project — there is no emulator — and Analytics stays off outside production builds. Leaving a match does not delete it: one made with "Create match" stays in the lobby's open list until it ages out after five minutes, while one made with "Play with bots" is never listed.
 - **Doc Maintenance**: After changes, check if `CLAUDE.md`, `docs/game.md` and `docs/typescript.md` need updating. A rule that changes, or a new one, goes in the file that already holds its section: workflow, layering, tooling and deployment here, match and physics in `docs/game.md`.
 
 ## Tooling
