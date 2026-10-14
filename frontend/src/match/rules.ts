@@ -18,8 +18,20 @@ import type {DieSnapshot, ThrowResolution} from '@/scene/die_state'
  * and never judged.
  */
 
-/** How many dice each player is given at the start of a match. */
-export const STARTING_POOL = 6
+/**
+ * How many dice each player is given at the start of a match.
+ *
+ * Settled by the size of a group, because that is what decides how much of the
+ * match the bowl can hold. At a group of two it never holds more than four or
+ * five dice; at three, pairs stay standing in it and it can hold ten, and a
+ * hand dealt the same six runs dry while most of the match is still sitting in
+ * the bowl waiting to be grouped.
+ * @param groupSize - How many dice of one value the match counts as a group
+ * @returns How many dice every hand is dealt
+ */
+export function startingPool(groupSize: number): number {
+  return groupSize >= 3 ? 10 : 6
+}
 
 /**
  * The hand a player sits down with: their whole allowance, every die of it in
@@ -29,10 +41,11 @@ export const STARTING_POOL = 6
  * paint that already exists between hands and the bowl, so a colour a player
  * never chose can only reach their hand by their winning it.
  * @param color - The skin the player is playing in
+ * @param groupSize - How many dice of one value the match counts as a group
  * @returns Their opening hand
  */
-export function startingHand(color: number): number[] {
-  return new Array<number>(STARTING_POOL).fill(color)
+export function startingHand(color: number, groupSize: number): number[] {
+  return new Array<number>(startingPool(groupSize)).fill(color)
 }
 
 /**

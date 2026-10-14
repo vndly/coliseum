@@ -33,7 +33,7 @@ const PRIMARY_BUTTON_ONLY = 1
 
 /**
  * How far the cloud's lattice reaches in each direction, in cells. Two is a
- * five by five by five block, which is well past the thirty-six dice a match
+ * five by five by five block, which is well past the sixty-one dice a match
  * can hold and so past the largest hand that can ever be dropped at once.
  */
 const CLOUD_CELL_REACH = 2
@@ -821,11 +821,16 @@ export class ThrowController {
    * a hand of six thrown from exactly the circle it has always been thrown from.
    *
    * Six dice fit the first ring, twelve the second and eighteen the third:
-   * thirty-six between them, which is every die a match can hold, inside a
-   * radius of three spacings. That bound is the whole reason for filling
-   * outwards rather than opening one ring up — a single circle wide enough to
-   * hold a large hand apart is wider than the bowl, and the dice on it come
-   * down on the table, where a die leaves the match for good.
+   * thirty-six between them, inside a radius of three spacings. That bound is
+   * the whole reason for filling outwards rather than opening one ring up — a
+   * single circle wide enough to hold a large hand apart is wider than the
+   * bowl, and the dice on it come down on the table, where a die leaves the
+   * match for good. A fourth ring of twenty-five carries it to sixty-one, which
+   * is every die a match can hold, and is as wide as the bowl's mouth: its
+   * outer dice can meet the rim. Only a hand of more than thirty-six reaches
+   * it, which takes four or more seats dealt ten apiece and one of them going
+   * all in holding most of the match, and that is left rather than packed
+   * tighter.
    * @param index - Which die of the fan this is
    * @returns Its ring's number, that ring's capacity, and the first die on it
    */
@@ -856,11 +861,11 @@ export class ThrowController {
    * that many spacings around — which is the figure taken here. Circumference
    * is the generous reading, since dice sit a chord apart and a chord is
    * shorter than the arc it subtends, so the figure is checked rather than
-   * trusted: at six, twelve and eighteen the chords come out at 1.20, 1.24 and
-   * 1.25 spacings, so every ring a match can reach holds its dice at least a
-   * spacing apart. The exact chord form is deliberately not used — it evaluates
-   * to a hair under six on the first ring and would quietly move a hand of six
-   * onto two rings.
+   * trusted: at six, twelve, eighteen and twenty-five the chords come out at
+   * 1.20, 1.24, 1.25 and 1.20 spacings, so every ring a match can reach holds
+   * its dice at least a spacing apart. The exact chord form is deliberately not
+   * used — it evaluates to a hair under six on the first ring and would quietly
+   * move a hand of six onto two rings.
    * @param ring - Which ring, counting outwards from the first
    * @returns How many dice it holds
    */

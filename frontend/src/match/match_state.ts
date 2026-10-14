@@ -1,5 +1,5 @@
 import {isEmote} from '@/match/emotes'
-import {DEFAULT_GROUP_SIZE, GROUP_SIZES, MAX_PLAYERS, MIN_PLAYERS, STARTING_POOL} from '@/match/rules'
+import {DEFAULT_GROUP_SIZE, GROUP_SIZES, MAX_PLAYERS, MIN_PLAYERS, startingPool} from '@/match/rules'
 import {BONE_SKIN, isDieSkin} from '@/scene/die_skins'
 import type {DieSnapshot, ThrowLaunch, ThrowResolution, ThrownDie} from '@/scene/die_state'
 
@@ -174,9 +174,10 @@ export interface EmoteRecord {
  * when the match starts and no hand ever paid for it, so it is the one die
  * that can make a hand larger than the deal. A player holding all of them is
  * the player who has just won, and the document that says so has to be
- * readable.
+ * readable. Counted at the largest hand any group size is dealt, so that the
+ * one bound holds whichever size the match was made at.
  */
-const MATCH_DICE = STARTING_POOL * MAX_PLAYERS + 1
+const MATCH_DICE = Math.max(...GROUP_SIZES.map(startingPool)) * MAX_PLAYERS + 1
 
 /**
  * How far a stored attitude may be from being a unit quaternion before it is

@@ -3,8 +3,9 @@
      The same sheet in the lobby and in a match, which is the whole reason it
      reads nothing off either. A match settles how large a group is, and a sheet
      that named this match's answer would be a different sheet in each of the
-     two places it is opened from — so the one rule that varies is named as a
-     choice a match is made with, and everything else is the game.
+     two places it is opened from — so the rules that vary with it, the size of
+     a group and the hand that size deals, are named as a choice a match is made
+     with, and everything else is the game.
 
      The flush is left out altogether rather than named the same way. It is the
      one rule a match can turn off entirely, and the three steps below are the
@@ -85,7 +86,8 @@ onBeforeUnmount(() => {
       <h2 id="rules-heading" class="sheet__title">How to play</h2>
 
       <p class="sheet__line">
-        Everyone starts with six dice. Run out of dice and you
+        Everyone starts with six dice, or ten in a match played in groups
+        of three. Run out of dice and you
         are out. The last player still holding dice wins.
       </p>
 

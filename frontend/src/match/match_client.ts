@@ -121,7 +121,7 @@ export class MatchClient {
     const pools: Record<string, number[]> = {}
 
     for (const seat of seats) {
-      pools[seat.uid] = startingHand(seat.color)
+      pools[seat.uid] = startingHand(seat.color, groupSize)
     }
 
     const started = seats.length === playerCount
@@ -238,7 +238,7 @@ export class MatchClient {
           // hand dealt before the change would go on being thrown in the colour
           // its player has just left behind — and nothing has been thrown out
           // of it yet, because the match has not started.
-          [`pools.${playerId}`]: startingHand(color),
+          [`pools.${playerId}`]: startingHand(color, state.groupSize),
         })
 
         return outcome
@@ -266,7 +266,7 @@ export class MatchClient {
         players: players,
         pools: {
           ...state.pools,
-          [playerId]: startingHand(color),
+          [playerId]: startingHand(color, state.groupSize),
         },
       }
 
